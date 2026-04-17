@@ -209,6 +209,8 @@ pub struct Limits {
     /// The maximum allowed number of color attachments per subpass.
     pub max_subpass_color_attachments: u32,
     /// The maximum allowed number of subpasses in a render pass.
+    ///
+    /// This value must not exceed [`crate::ActiveSubpassMask::MAX_SUBPASSES`].
     pub max_subpasses: u32,
     /// The maximum allowed number of input attachments per subpass.
     pub max_input_attachments: u32,
@@ -746,6 +748,18 @@ impl Limits {
                     }
                 }
             };
+        }
+
+        let max_mask_subpasses = crate::ActiveSubpassMask::MAX_SUBPASSES as u64;
+        if self.max_subpasses as u64 > max_mask_subpasses {
+            fail_fn(
+                "max_subpasses",
+                self.max_subpasses as u64,
+                max_mask_subpasses,
+            );
+            if fatal {
+                return;
+            }
         }
 
         with_limits!(check_with_fail_fn);

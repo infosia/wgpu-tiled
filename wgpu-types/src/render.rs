@@ -1206,12 +1206,16 @@ pub struct TransientDispatchDescriptor {
 }
 
 /// Bitmask selecting active subpasses.
+///
+/// This mask is currently limited to 32 subpasses (`u32::BITS`).
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct ActiveSubpassMask(pub u32);
 
 impl ActiveSubpassMask {
+    /// Maximum number of subpasses addressable by this mask.
+    pub const MAX_SUBPASSES: u32 = u32::BITS;
     /// All 32 possible subpasses active.
     pub const ALL: Self = Self(u32::MAX);
     /// No subpasses active.
@@ -1220,22 +1224,25 @@ impl ActiveSubpassMask {
     /// Returns true when a given subpass index is active.
     #[must_use]
     pub fn is_active(self, index: SubpassIndex) -> bool {
-        debug_assert!(index.0 < 32);
-        (self.0 & (1u32 << index.0)) != 0
+        debug_assert!(index.0 < Self::MAX_SUBPASSES);
+        let bit = 1u32.checked_shl(index.0).unwrap_or(0);
+        (self.0 & bit) != 0
     }
 
     /// Returns a copy with the given subpass marked active.
     #[must_use]
     pub fn with(self, index: SubpassIndex) -> Self {
-        debug_assert!(index.0 < 32);
-        Self(self.0 | (1u32 << index.0))
+        debug_assert!(index.0 < Self::MAX_SUBPASSES);
+        let bit = 1u32.checked_shl(index.0).unwrap_or(0);
+        Self(self.0 | bit)
     }
 
     /// Returns a copy with the given subpass marked inactive.
     #[must_use]
     pub fn without(self, index: SubpassIndex) -> Self {
-        debug_assert!(index.0 < 32);
-        Self(self.0 & !(1u32 << index.0))
+        debug_assert!(index.0 < Self::MAX_SUBPASSES);
+        let bit = 1u32.checked_shl(index.0).unwrap_or(0);
+        Self(self.0 & !bit)
     }
 
     /// Returns the number of active subpasses.

@@ -179,7 +179,7 @@ pub const CAPABILITIES: crate::Capabilities = {
 
     crate::Capabilities {
         limits: wgt::Limits {
-            // All maximally permissive
+            // All maximally permissive except unsupported subpass/tile capabilities.
             max_texture_dimension_1d: ALLOC_MAX_U32,
             max_texture_dimension_2d: ALLOC_MAX_U32,
             max_texture_dimension_3d: ALLOC_MAX_U32,
@@ -206,10 +206,10 @@ pub const CAPABILITIES: crate::Capabilities = {
             min_uniform_buffer_offset_alignment: 1,
             min_storage_buffer_offset_alignment: 1,
             max_color_attachments: ALLOC_MAX_U32,
-            max_subpass_color_attachments: ALLOC_MAX_U32,
-            max_subpasses: ALLOC_MAX_U32,
-            max_input_attachments: ALLOC_MAX_U32,
-            estimated_tile_memory_bytes: ALLOC_MAX_U32,
+            max_subpass_color_attachments: 0,
+            max_subpasses: 0,
+            max_input_attachments: 0,
+            estimated_tile_memory_bytes: 0,
             max_color_attachment_bytes_per_sample: ALLOC_MAX_U32,
             max_compute_workgroup_storage_size: ALLOC_MAX_U32,
             max_compute_invocations_per_workgroup: ALLOC_MAX_U32,

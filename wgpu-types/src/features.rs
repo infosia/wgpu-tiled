@@ -862,10 +862,7 @@ bitflags_array! {
         const PARTIALLY_BOUND_BINDING_ARRAY = 1 << 13;
         /// Enables multi-subpass render pass support.
         ///
-        /// Supported platforms:
-        /// - Vulkan
-        /// - Metal (where supported by adapter capabilities)
-        /// - GLES (native or emulated paths)
+        /// This is reserved for future backend implementations.
         ///
         /// This is a native only feature.
         #[name("wgpu-multi-subpass")]

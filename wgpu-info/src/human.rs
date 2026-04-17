@@ -230,9 +230,9 @@ fn print_adapter(output: &mut impl io::Write, report: &AdapterReport, idx: usize
     writeln!(output, "\t\t                Min Storage Buffer Offset Alignment: {min_storage_buffer_offset_alignment}")?;
     writeln!(output, "\t\t                              Max Color Attachments: {max_color_attachments}")?;
     writeln!(output, "\t\t                      Max Subpass Color Attachments: {max_subpass_color_attachments}")?;
-    writeln!(output, "\t\t                                   Max Subpasses: {max_subpasses}")?;
-    writeln!(output, "\t\t                           Max Input Attachments: {max_input_attachments}")?;
-    writeln!(output, "\t\t                    Estimated Tile Memory (bytes): {estimated_tile_memory_bytes}")?;
+    writeln!(output, "\t\t                                      Max Subpasses: {max_subpasses}")?;
+    writeln!(output, "\t\t                              Max Input Attachments: {max_input_attachments}")?;
+    writeln!(output, "\t\t                      Estimated Tile Memory (bytes): {estimated_tile_memory_bytes}")?;
     writeln!(output, "\t\t              Max Color Attachment Bytes per sample: {max_color_attachment_bytes_per_sample}")?;
     writeln!(output, "\t\t                 Max Compute Workgroup Storage Size: {max_compute_workgroup_storage_size}")?;
     writeln!(output, "\t\t              Max Compute Invocations Per Workgroup: {max_compute_invocations_per_workgroup}")?;
