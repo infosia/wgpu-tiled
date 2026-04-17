@@ -1,4 +1,5 @@
 use super::conv;
+use alloc::vec::Vec;
 use arrayvec::ArrayVec;
 use ash::vk;
 use core::{mem, ops::Range};
@@ -6,6 +7,30 @@ use hashbrown::hash_map::Entry;
 
 const ALLOCATION_GRANULARITY: u32 = 16;
 const DST_IMAGE_LAYOUT: vk::ImageLayout = vk::ImageLayout::TRANSFER_DST_OPTIMAL;
+
+fn first_active_subpass_index(
+    subpass_count: u32,
+    mask: Option<wgt::ActiveSubpassMask>,
+) -> Option<u32> {
+    if subpass_count == 0 {
+        return None;
+    }
+    let mask_bits = mask.unwrap_or(wgt::ActiveSubpassMask::ALL).0;
+    let search_end = subpass_count.min(wgt::ActiveSubpassMask::MAX_SUBPASSES);
+    (0..search_end).find(|&index| (mask_bits & (1u32 << index)) != 0)
+}
+
+fn next_active_subpass_index(
+    current: u32,
+    subpass_count: u32,
+    mask: Option<wgt::ActiveSubpassMask>,
+) -> u32 {
+    let mask_bits = mask.unwrap_or(wgt::ActiveSubpassMask::ALL).0;
+    let search_end = subpass_count.min(wgt::ActiveSubpassMask::MAX_SUBPASSES);
+    ((current + 1)..search_end)
+        .find(|&index| (mask_bits & (1u32 << index)) != 0)
+        .unwrap_or(subpass_count)
+}
 
 impl super::Texture {
     fn map_buffer_copies<T>(&self, regions: T) -> impl Iterator<Item = vk::BufferImageCopy>
@@ -140,6 +165,9 @@ impl crate::CommandEncoder for super::CommandEncoder {
 
         // Reset this in case the last renderpass was never ended.
         self.rpass_debug_marker_active = false;
+        self.active_subpass_index = None;
+        self.subpass_count = 0;
+        self.active_subpass_mask = None;
 
         let vk_info = vk::CommandBufferBeginInfo::default()
             .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
@@ -177,6 +205,9 @@ impl crate::CommandEncoder for super::CommandEncoder {
         I: Iterator<Item = super::CommandBuffer>,
     {
         self.temp.clear();
+        self.active_subpass_index = None;
+        self.subpass_count = 0;
+        self.active_subpass_mask = None;
         self.free
             .extend(cmd_bufs.into_iter().map(|cmd_buf| cmd_buf.raw));
         self.free.append(&mut self.discarded);
@@ -782,6 +813,14 @@ impl crate::CommandEncoder for super::CommandEncoder {
         &mut self,
         desc: &crate::RenderPassDescriptor<super::QuerySet, super::TextureView>,
     ) -> Result<(), crate::DeviceError> {
+        self.active_subpass_index = None;
+        self.subpass_count = desc.subpasses.len() as u32;
+        self.active_subpass_mask = if self.subpass_count > 0 {
+            desc.active_subpass_mask
+        } else {
+            None
+        };
+
         let mut vk_clear_values =
             ArrayVec::<vk::ClearValue, { super::MAX_TOTAL_ATTACHMENTS }>::new();
         let mut rp_key = super::RenderPassKey {
@@ -789,6 +828,8 @@ impl crate::CommandEncoder for super::CommandEncoder {
             depth_stencil: None,
             sample_count: desc.sample_count,
             multiview_mask: desc.multiview_mask,
+            subpasses: Vec::new(),
+            subpass_dependencies: desc.subpass_dependencies.to_vec(),
         };
         let mut fb_key = super::FramebufferKey {
             raw_pass: vk::RenderPass::null(),
@@ -796,9 +837,15 @@ impl crate::CommandEncoder for super::CommandEncoder {
             attachment_identities: ArrayVec::default(),
             extent: desc.extent,
         };
+        let mut color_attachment_indices = vec![None; desc.color_attachments.len()];
+        let mut resolve_attachment_indices = vec![None; desc.color_attachments.len()];
+        let mut depth_stencil_attachment_index = None;
+        let mut next_attachment_index = 0u32;
 
-        for cat in desc.color_attachments {
+        for (color_slot, cat) in desc.color_attachments.iter().enumerate() {
             if let Some(cat) = cat.as_ref() {
+                color_attachment_indices[color_slot] = Some(next_attachment_index);
+                next_attachment_index += 1;
                 let color_view = if cat.target.view.dimension == wgt::TextureViewDimension::D3 {
                     let key = super::TempTextureViewKey {
                         texture: cat.target.view.raw_texture,
@@ -827,6 +874,8 @@ impl crate::CommandEncoder for super::CommandEncoder {
                 rp_key.colors.push(Some(color));
                 fb_key.push_view(color_view);
                 if let Some(ref at) = cat.resolve_target {
+                    resolve_attachment_indices[color_slot] = Some(next_attachment_index);
+                    next_attachment_index += 1;
                     vk_clear_values.push(unsafe { mem::zeroed() });
                     fb_key.push_view(at.view.identified_raw_view());
                 }
@@ -835,6 +884,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
             }
         }
         if let Some(ref ds) = desc.depth_stencil_attachment {
+            depth_stencil_attachment_index = Some(next_attachment_index);
             vk_clear_values.push(vk::ClearValue {
                 depth_stencil: vk::ClearDepthStencilValue {
                     depth: ds.clear_value.0,
@@ -846,6 +896,130 @@ impl crate::CommandEncoder for super::CommandEncoder {
                 stencil_ops: ds.stencil_ops,
             });
             fb_key.push_view(ds.target.view.identified_raw_view());
+        }
+
+        if self.subpass_count > 0 {
+            rp_key.subpasses.reserve(desc.subpasses.len());
+            for subpass in desc.subpasses {
+                let persistent_color_count = subpass
+                    .color_attachments
+                    .iter()
+                    .filter(|attachment| {
+                        matches!(
+                            attachment,
+                            Some(crate::SubpassColorAttachment::Persistent(_))
+                        )
+                    })
+                    .count();
+                if !subpass.color_attachments.is_empty()
+                    && persistent_color_count != subpass.color_attachment_indices.len()
+                {
+                    log::error!(
+                        "vulkan: subpass color_attachments/color_attachment_indices mismatch: persistent={}, indices={}",
+                        persistent_color_count,
+                        subpass.color_attachment_indices.len()
+                    );
+                    return Err(crate::DeviceError::Unexpected);
+                }
+                let mut subpass_color_attachment_indices = Vec::new();
+                let mut subpass_resolve_attachment_indices = Vec::new();
+                if !subpass.color_attachments.is_empty() {
+                    let mut attachment_slot_iter = subpass.color_attachment_indices.iter().copied();
+                    for color_attachment in subpass.color_attachments {
+                        match color_attachment {
+                            Some(crate::SubpassColorAttachment::Persistent(_)) => {
+                                let attachment_slot = attachment_slot_iter.next();
+                                let color_attachment_index = attachment_slot.and_then(|slot| {
+                                    color_attachment_indices
+                                        .get(slot as usize)
+                                        .copied()
+                                        .flatten()
+                                });
+                                let resolve_attachment_index = attachment_slot
+                                    .and_then(|slot| {
+                                        resolve_attachment_indices
+                                            .get(slot as usize)
+                                            .copied()
+                                            .flatten()
+                                    })
+                                    .unwrap_or(vk::ATTACHMENT_UNUSED);
+                                subpass_color_attachment_indices.push(color_attachment_index);
+                                subpass_resolve_attachment_indices.push(resolve_attachment_index);
+                            }
+                            Some(crate::SubpassColorAttachment::Transient {
+                                transient_index: _,
+                                ..
+                            }) => {
+                                // TODO(Phase 6): wire transient attachment indices through
+                                // render-pass attachment/framebuffer construction.
+                                log::error!(
+                                    "vulkan: transient subpass color attachments are not wired to render pass/framebuffer attachment lists yet"
+                                );
+                                return Err(crate::DeviceError::Unexpected);
+                            }
+                            None => {
+                                subpass_color_attachment_indices.push(None);
+                                subpass_resolve_attachment_indices.push(vk::ATTACHMENT_UNUSED);
+                            }
+                        }
+                    }
+                } else {
+                    for &attachment_slot in subpass.color_attachment_indices {
+                        let color_attachment_index = color_attachment_indices
+                            .get(attachment_slot as usize)
+                            .copied()
+                            .flatten();
+                        let resolve_attachment_index = resolve_attachment_indices
+                            .get(attachment_slot as usize)
+                            .copied()
+                            .flatten()
+                            .unwrap_or(vk::ATTACHMENT_UNUSED);
+                        subpass_color_attachment_indices.push(color_attachment_index);
+                        subpass_resolve_attachment_indices.push(resolve_attachment_index);
+                    }
+                }
+
+                let input_attachment_indices = subpass
+                    .input_attachments
+                    .iter()
+                    .map(|input_attachment| match input_attachment.source {
+                        wgt::SubpassInputSource::Color {
+                            attachment_index, ..
+                        } => color_attachment_indices
+                            .get(attachment_index as usize)
+                            .copied()
+                            .flatten()
+                            .unwrap_or(vk::ATTACHMENT_UNUSED),
+                        wgt::SubpassInputSource::Depth { .. } => {
+                            depth_stencil_attachment_index.unwrap_or(vk::ATTACHMENT_UNUSED)
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let depth_stencil_index = match subpass.depth_stencil_attachment.as_ref() {
+                    Some(crate::SubpassDepthStencilAttachment::Persistent(_)) => {
+                        depth_stencil_attachment_index
+                    }
+                    Some(crate::SubpassDepthStencilAttachment::Transient {
+                        transient_index: _,
+                        ..
+                    }) => {
+                        // TODO(Phase 6): wire transient attachment indices through
+                        // render-pass attachment/framebuffer construction.
+                        log::error!(
+                            "vulkan: transient subpass depth/stencil attachments are not wired to render pass/framebuffer attachment lists yet"
+                        );
+                        return Err(crate::DeviceError::Unexpected);
+                    }
+                    None => None,
+                };
+
+                rp_key.subpasses.push(super::SubpassKey {
+                    color_attachment_indices: subpass_color_attachment_indices,
+                    input_attachment_indices,
+                    depth_stencil_index,
+                    resolve_attachment_indices: subpass_resolve_attachment_indices,
+                });
+            }
         }
 
         let render_area = vk::Rect2D {
@@ -904,12 +1078,46 @@ impl crate::CommandEncoder for super::CommandEncoder {
                 vk::SubpassContents::INLINE,
             );
         };
+        if self.subpass_count > 0 {
+            if let Some(active_subpass_index) =
+                first_active_subpass_index(self.subpass_count, self.active_subpass_mask)
+            {
+                for _ in 0..active_subpass_index {
+                    unsafe {
+                        self.device
+                            .raw
+                            .cmd_next_subpass(self.active, vk::SubpassContents::INLINE);
+                    }
+                }
+                self.active_subpass_index = Some(active_subpass_index);
+            } else {
+                for _ in 1..self.subpass_count {
+                    unsafe {
+                        self.device
+                            .raw
+                            .cmd_next_subpass(self.active, vk::SubpassContents::INLINE);
+                    }
+                }
+            }
+        }
 
         self.bind_point = vk::PipelineBindPoint::GRAPHICS;
 
         Ok(())
     }
     unsafe fn end_render_pass(&mut self) {
+        if self.subpass_count > 0 {
+            let current_subpass = self
+                .active_subpass_index
+                .unwrap_or(self.subpass_count.saturating_sub(1));
+            for _ in (current_subpass + 1)..self.subpass_count {
+                unsafe {
+                    self.device
+                        .raw
+                        .cmd_next_subpass(self.active, vk::SubpassContents::INLINE);
+                }
+            }
+        }
         unsafe {
             self.device.raw.cmd_end_render_pass(self.active);
         }
@@ -923,9 +1131,33 @@ impl crate::CommandEncoder for super::CommandEncoder {
             }
             self.rpass_debug_marker_active = false;
         }
+        self.active_subpass_index = None;
+        self.subpass_count = 0;
+        self.active_subpass_mask = None;
     }
     unsafe fn next_subpass(&mut self) {
-        unreachable!()
+        if self.subpass_count == 0 {
+            return;
+        }
+        let Some(current_subpass) = self.active_subpass_index else {
+            return;
+        };
+        let next_subpass = next_active_subpass_index(
+            current_subpass,
+            self.subpass_count,
+            self.active_subpass_mask,
+        );
+        if current_subpass + 1 < self.subpass_count {
+            let final_target = next_subpass.min(self.subpass_count - 1);
+            for _ in (current_subpass + 1)..=final_target {
+                unsafe {
+                    self.device
+                        .raw
+                        .cmd_next_subpass(self.active, vk::SubpassContents::INLINE);
+                }
+            }
+        }
+        self.active_subpass_index = (next_subpass < self.subpass_count).then_some(next_subpass);
     }
     unsafe fn dispatch_transient(&mut self, _dispatch: &super::TransientDispatch) {
         unreachable!()
@@ -1405,4 +1637,47 @@ fn check_dst_image_layout() {
         conv::derive_image_layout(wgt::TextureUses::COPY_DST, wgt::TextureFormat::Rgba8Unorm),
         DST_IMAGE_LAYOUT
     );
+}
+
+#[test]
+fn subpass_traversal_sequential() {
+    let mask = None;
+    assert_eq!(first_active_subpass_index(3, mask), Some(0));
+    assert_eq!(next_active_subpass_index(0, 3, mask), 1);
+    assert_eq!(next_active_subpass_index(1, 3, mask), 2);
+    assert_eq!(next_active_subpass_index(2, 3, mask), 3);
+}
+
+#[test]
+fn subpass_traversal_skips_culled_middle() {
+    let mask = Some(
+        wgt::ActiveSubpassMask::NONE
+            .with(wgt::SubpassIndex(0))
+            .with(wgt::SubpassIndex(2)),
+    );
+    assert_eq!(first_active_subpass_index(3, mask), Some(0));
+    assert_eq!(next_active_subpass_index(0, 3, mask), 2);
+    assert_eq!(next_active_subpass_index(2, 3, mask), 3);
+}
+
+#[test]
+fn subpass_traversal_skips_initial_culled() {
+    let mask = Some(
+        wgt::ActiveSubpassMask::NONE
+            .with(wgt::SubpassIndex(2))
+            .with(wgt::SubpassIndex(3)),
+    );
+    assert_eq!(first_active_subpass_index(4, mask), Some(2));
+}
+
+#[test]
+fn subpass_traversal_all_culled() {
+    let mask = Some(wgt::ActiveSubpassMask::NONE);
+    assert_eq!(first_active_subpass_index(4, mask), None);
+}
+
+#[test]
+fn subpass_traversal_zero_subpasses() {
+    let mask = Some(wgt::ActiveSubpassMask::NONE);
+    assert_eq!(first_active_subpass_index(0, mask), None);
 }

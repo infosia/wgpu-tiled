@@ -2683,7 +2683,15 @@ pub enum SubpassDepthStencilAttachment<'a, T: DynTextureView + ?Sized> {
 
 #[derive(Clone, Debug)]
 pub struct Subpass<'a, T: DynTextureView + ?Sized> {
+    /// Optional per-slot color attachment descriptions.
+    ///
+    /// When non-empty, every `Persistent(..)` entry must consume one slot from
+    /// `color_attachment_indices` in order.
     pub color_attachments: &'a [Option<SubpassColorAttachment<'a, T>>],
+    /// Indices into `RenderPassDescriptor::color_attachments`.
+    ///
+    /// In the non-empty `color_attachments` mode above, this list must contain
+    /// exactly one index for each `Persistent(..)` entry.
     pub color_attachment_indices: &'a [u32],
     pub depth_stencil_attachment: Option<SubpassDepthStencilAttachment<'a, T>>,
     pub input_attachments: &'a [wgt::SubpassInputAttachment],

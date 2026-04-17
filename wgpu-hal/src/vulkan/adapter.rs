@@ -647,6 +647,7 @@ impl PhysicalDeviceFeatures {
         let mut features = F::empty()
             | F::MAPPABLE_PRIMARY_BUFFERS
             | F::IMMEDIATES
+            | F::MULTI_SUBPASS
             | F::ADDRESS_MODE_CLAMP_TO_BORDER
             | F::ADDRESS_MODE_CLAMP_TO_ZERO
             | F::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
@@ -657,6 +658,9 @@ impl PhysicalDeviceFeatures {
             | F::PASSTHROUGH_SHADERS
             | F::MEMORY_DECORATION_COHERENT
             | F::MEMORY_DECORATION_VOLATILE;
+        // TODO(Phase 6): enable once transient attachments are wired into Vulkan render-pass
+        // attachment lists and framebuffer creation end-to-end.
+        features.set(F::TRANSIENT_ATTACHMENTS, false);
 
         let mut dl_flags = Df::COMPUTE_SHADERS
             | Df::BASE_VERTEX
@@ -1638,9 +1642,9 @@ impl PhysicalDeviceProperties {
                 / 4
                 - 1, // -1 for position
             max_color_attachments,
-            max_subpass_color_attachments: 0,
-            max_subpasses: 0,
-            max_input_attachments: 0,
+            max_subpass_color_attachments: max_color_attachments,
+            max_subpasses: wgt::ActiveSubpassMask::MAX_SUBPASSES,
+            max_input_attachments: limits.max_per_stage_descriptor_input_attachments,
             estimated_tile_memory_bytes: 0,
             max_color_attachment_bytes_per_sample,
             max_compute_workgroup_storage_size: limits.max_compute_shared_memory_size,

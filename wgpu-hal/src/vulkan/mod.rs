@@ -464,12 +464,22 @@ struct DepthStencilAttachmentKey {
     stencil_ops: crate::AttachmentOps,
 }
 
+#[derive(Clone, Eq, Hash, PartialEq)]
+struct SubpassKey {
+    color_attachment_indices: Vec<Option<u32>>,
+    input_attachment_indices: Vec<u32>,
+    depth_stencil_index: Option<u32>,
+    resolve_attachment_indices: Vec<u32>,
+}
+
 #[derive(Clone, Eq, Default, Hash, PartialEq)]
 struct RenderPassKey {
     colors: ArrayVec<Option<ColorAttachmentKey>, { crate::MAX_COLOR_ATTACHMENTS }>,
     depth_stencil: Option<DepthStencilAttachmentKey>,
     sample_count: u32,
     multiview_mask: Option<NonZeroU32>,
+    subpasses: Vec<SubpassKey>,
+    subpass_dependencies: Vec<wgt::SubpassDependency>,
 }
 
 struct DeviceShared {
@@ -773,9 +783,24 @@ pub struct TextureView {
 impl crate::DynTextureView for TextureView {}
 
 #[derive(Debug)]
-pub struct TransientAttachment;
+pub struct TransientAttachment {
+    raw_image: vk::Image,
+    raw_view: vk::ImageView,
+    #[allow(dead_code)]
+    format: wgt::TextureFormat,
+    #[allow(dead_code)]
+    width: u32,
+    #[allow(dead_code)]
+    height: u32,
+    #[allow(dead_code)]
+    sample_count: u32,
+    allocation: gpu_allocator::vulkan::Allocation,
+}
 
 impl crate::DynTransientAttachment for TransientAttachment {}
+
+unsafe impl Send for TransientAttachment {}
+unsafe impl Sync for TransientAttachment {}
 
 #[derive(Debug)]
 pub struct TransientDispatch;
@@ -1006,6 +1031,9 @@ pub struct CommandEncoder {
     counters: Arc<wgt::HalCounters>,
 
     current_pipeline_is_multiview: bool,
+    active_subpass_index: Option<u32>,
+    subpass_count: u32,
+    active_subpass_mask: Option<wgt::ActiveSubpassMask>,
 }
 
 impl Drop for CommandEncoder {
