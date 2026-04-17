@@ -1152,6 +1152,10 @@ impl super::CapabilitiesQuery {
             features.insert(F::MULTIVIEW);
         }
 
+        // TODO(Phase 12): enable once Metal begin_render_pass consumes subpass/transient
+        // descriptors end-to-end.
+        features.set(F::TRANSIENT_ATTACHMENTS | F::MULTI_SUBPASS, false);
+
         features.set(F::EXPERIMENTAL_RAY_QUERY, self.supports_raytracing);
 
         features
@@ -1186,6 +1190,19 @@ impl super::CapabilitiesQuery {
             .set(wgt::DownlevelFlags::ANISOTROPIC_FILTERING, true);
 
         let base = wgt::Limits::default();
+        // TODO(Phase 12): expose non-zero subpass/tile limits once multi-subpass wiring is complete.
+        let supports_subpasses = false;
+        let max_subpass_attachments = if supports_subpasses {
+            self.max_color_render_targets as u32
+        } else {
+            0
+        };
+        let max_subpasses = if supports_subpasses {
+            wgt::ActiveSubpassMask::MAX_SUBPASSES
+        } else {
+            0
+        };
+        let estimated_tile_memory_bytes = if supports_subpasses { 32 * 1024 } else { 0 };
         // Be careful adjusting limits here. The `AdapterShared` stores the
         // original `PrivateCapabilities`, so code could accidentally use
         // the wrong value. See <https://github.com/gfx-rs/wgpu/issues/8715>.
@@ -1222,10 +1239,10 @@ impl super::CapabilitiesQuery {
             min_uniform_buffer_offset_alignment: self.buffer_alignment as u32,
             min_storage_buffer_offset_alignment: self.buffer_alignment as u32,
             max_color_attachments: self.max_color_render_targets as u32,
-            max_subpass_color_attachments: 0,
-            max_subpasses: 0,
-            max_input_attachments: 0,
-            estimated_tile_memory_bytes: 0,
+            max_subpass_color_attachments: max_subpass_attachments,
+            max_subpasses,
+            max_input_attachments: max_subpass_attachments,
+            estimated_tile_memory_bytes,
             max_color_attachment_bytes_per_sample: self.max_color_attachment_bytes_per_sample
                 as u32,
             max_compute_workgroup_storage_size: self.max_total_threadgroup_memory,

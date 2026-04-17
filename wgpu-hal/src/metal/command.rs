@@ -26,6 +26,29 @@ use smallvec::SmallVec;
 // has to match `Temp::binding_sizes`
 const WORD_SIZE: usize = 4;
 
+fn first_active_subpass_index(
+    subpass_count: u32,
+    mask: Option<wgt::ActiveSubpassMask>,
+) -> Option<u32> {
+    let mask_bits = mask.unwrap_or(wgt::ActiveSubpassMask::ALL).0;
+    let search_end = subpass_count.min(wgt::ActiveSubpassMask::MAX_SUBPASSES);
+    (0..search_end).find(|&index| (mask_bits & (1u32 << index)) != 0)
+}
+
+fn next_active_subpass_index(
+    current: u32,
+    subpass_count: u32,
+    mask: Option<wgt::ActiveSubpassMask>,
+) -> u32 {
+    let mask_bits = mask.unwrap_or(wgt::ActiveSubpassMask::ALL).0;
+    let search_end = subpass_count.min(wgt::ActiveSubpassMask::MAX_SUBPASSES);
+    let mut index = current.saturating_add(1);
+    while index < search_end && (mask_bits & (1u32 << index)) == 0 {
+        index += 1;
+    }
+    index
+}
+
 impl Default for super::CommandState {
     fn default() -> Self {
         Self {
@@ -40,6 +63,9 @@ impl Default for super::CommandState {
             vertex_buffer_size_map: Default::default(),
             immediates: Vec::new(),
             pending_timer_queries: Vec::new(),
+            active_subpass_index: None,
+            subpass_count: 0,
+            active_subpass_mask: None,
         }
     }
 }
@@ -152,6 +178,20 @@ impl Encoder<'_> {
 impl super::CommandEncoder {
     pub fn raw_command_buffer(&self) -> Option<&ProtocolObject<dyn MTLCommandBuffer>> {
         self.raw_cmd_buf.as_deref()
+    }
+
+    fn all_subpasses_culled(&self) -> bool {
+        self.state.subpass_count > 0 && self.state.active_subpass_index.is_none()
+    }
+
+    fn should_skip_render_commands(&self) -> bool {
+        if self.state.render.is_some() {
+            return false;
+        }
+        if self.all_subpasses_culled() {
+            return true;
+        }
+        panic!("metal render encoder missing outside all-culled subpass path");
     }
 
     fn enter_blit(&mut self) -> Retained<ProtocolObject<dyn MTLBlitCommandEncoder>> {
@@ -414,6 +454,9 @@ impl super::CommandState {
         self.stage_infos.ts.clear();
         self.stage_infos.ms.clear();
         self.immediates.clear();
+        self.active_subpass_index = None;
+        self.subpass_count = 0;
+        self.active_subpass_mask = None;
     }
 
     fn make_sizes_buffer_update<'a>(
@@ -504,6 +547,9 @@ impl crate::CommandEncoder for super::CommandEncoder {
         if let Some(encoder) = self.state.compute.take() {
             encoder.endEncoding();
         }
+        self.state.active_subpass_index = None;
+        self.state.subpass_count = 0;
+        self.state.active_subpass_mask = None;
         let had_command_buffer = self.raw_cmd_buf.is_some();
         // Clear the Option first so the underlying `metal::CommandBuffer` is
         // dropped before we update the counter.
@@ -862,6 +908,20 @@ impl crate::CommandEncoder for super::CommandEncoder {
     ) -> Result<(), crate::DeviceError> {
         self.begin_pass();
         self.state.index = None;
+        self.state.subpass_count = desc.subpasses.len() as u32;
+        self.state.active_subpass_mask = if self.state.subpass_count > 0 {
+            desc.active_subpass_mask
+        } else {
+            None
+        };
+        self.state.active_subpass_index = if self.state.subpass_count > 0 {
+            first_active_subpass_index(self.state.subpass_count, self.state.active_subpass_mask)
+        } else {
+            None
+        };
+        if self.state.subpass_count > 0 && self.state.active_subpass_index.is_none() {
+            return Ok(());
+        }
 
         assert!(self.state.blit.is_none());
         assert!(self.state.compute.is_none());
@@ -1048,10 +1108,27 @@ impl crate::CommandEncoder for super::CommandEncoder {
     }
 
     unsafe fn end_render_pass(&mut self) {
-        self.state.render.take().unwrap().endEncoding();
+        if let Some(encoder) = self.state.render.take() {
+            encoder.endEncoding();
+        }
+        self.state.active_subpass_index = None;
+        self.state.subpass_count = 0;
+        self.state.active_subpass_mask = None;
     }
     unsafe fn next_subpass(&mut self) {
-        unreachable!()
+        if self.state.subpass_count == 0 {
+            return;
+        }
+        let Some(current) = self.state.active_subpass_index else {
+            return;
+        };
+        let next = next_active_subpass_index(
+            current,
+            self.state.subpass_count,
+            self.state.active_subpass_mask,
+        );
+        debug_assert!(next <= self.state.subpass_count);
+        self.state.active_subpass_index = (next < self.state.subpass_count).then_some(next);
     }
     unsafe fn dispatch_transient(&mut self, _dispatch: &super::TransientDispatch) {
         unreachable!()
@@ -1245,6 +1322,9 @@ impl crate::CommandEncoder for super::CommandEncoder {
     }
 
     unsafe fn set_render_pipeline(&mut self, pipeline: &super::RenderPipeline) {
+        if self.should_skip_render_commands() {
+            return;
+        }
         self.state.raw_primitive_type = pipeline.raw_primitive_type;
         match pipeline.vs_info {
             Some(ref info) => self.state.stage_infos.vs.assign_from(info),
@@ -1262,7 +1342,6 @@ impl crate::CommandEncoder for super::CommandEncoder {
             Some(ref info) => self.state.stage_infos.ms.assign_from(info),
             None => self.state.stage_infos.ms.clear(),
         }
-
         let encoder = self.state.render.as_ref().unwrap();
         encoder.setRenderPipelineState(&pipeline.raw);
         encoder.setFrontFacingWinding(pipeline.raw_front_winding);
@@ -1384,14 +1463,19 @@ impl crate::CommandEncoder for super::CommandEncoder {
         binding: crate::BufferBinding<'a, super::Buffer>,
     ) {
         let buffer_index = self.shared.private_caps.max_vertex_buffers as u64 - 1 - index as u64;
-        let encoder = self.state.render.as_ref().unwrap();
-        unsafe {
-            encoder.setVertexBuffer_offset_atIndex(
-                Some(&binding.buffer.raw),
-                binding.offset as usize,
-                buffer_index as usize,
-            )
-        };
+        if self.should_skip_render_commands() {
+            return;
+        }
+        {
+            let encoder = self.state.render.as_ref().unwrap();
+            unsafe {
+                encoder.setVertexBuffer_offset_atIndex(
+                    Some(&binding.buffer.raw),
+                    binding.offset as usize,
+                    buffer_index as usize,
+                )
+            };
+        }
 
         let buffer_size = binding.resolve_size();
         if buffer_size > 0 {
@@ -1407,6 +1491,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
             .state
             .make_sizes_buffer_update(naga::ShaderStage::Vertex, &mut self.temp.binding_sizes)
         {
+            let encoder = self.state.render.as_ref().unwrap();
             unsafe {
                 encoder.setVertexBytes_length_atIndex(
                     NonNull::new(sizes.as_ptr().cast_mut().cast()).unwrap(),
@@ -1423,6 +1508,9 @@ impl crate::CommandEncoder for super::CommandEncoder {
         } else {
             depth_range.end
         };
+        if self.should_skip_render_commands() {
+            return;
+        }
         let encoder = self.state.render.as_ref().unwrap();
         encoder.setViewport(MTLViewport {
             originX: rect.x as _,
@@ -1441,14 +1529,23 @@ impl crate::CommandEncoder for super::CommandEncoder {
             width: rect.w as _,
             height: rect.h as _,
         };
+        if self.should_skip_render_commands() {
+            return;
+        }
         let encoder = self.state.render.as_ref().unwrap();
         encoder.setScissorRect(scissor);
     }
     unsafe fn set_stencil_reference(&mut self, value: u32) {
+        if self.should_skip_render_commands() {
+            return;
+        }
         let encoder = self.state.render.as_ref().unwrap();
         encoder.setStencilFrontReferenceValue_backReferenceValue(value, value);
     }
     unsafe fn set_blend_constants(&mut self, color: &[f32; 4]) {
+        if self.should_skip_render_commands() {
+            return;
+        }
         let encoder = self.state.render.as_ref().unwrap();
         encoder.setBlendColorRed_green_blue_alpha(color[0], color[1], color[2], color[3]);
     }
@@ -1460,6 +1557,9 @@ impl crate::CommandEncoder for super::CommandEncoder {
         first_instance: u32,
         instance_count: u32,
     ) {
+        if self.should_skip_render_commands() {
+            return;
+        }
         let encoder = self.state.render.as_ref().unwrap();
         if first_instance != 0 {
             unsafe {
@@ -1499,6 +1599,9 @@ impl crate::CommandEncoder for super::CommandEncoder {
         first_instance: u32,
         instance_count: u32,
     ) {
+        if self.should_skip_render_commands() {
+            return;
+        }
         let encoder = self.state.render.as_ref().unwrap();
         let index = self.state.index.as_ref().unwrap();
         let offset = (index.offset + index.stride * first_index as wgt::BufferAddress) as usize;
@@ -1545,6 +1648,9 @@ impl crate::CommandEncoder for super::CommandEncoder {
         group_count_y: u32,
         group_count_z: u32,
     ) {
+        if self.should_skip_render_commands() {
+            return;
+        }
         let encoder = self.state.render.as_ref().unwrap();
         let size = MTLSize {
             width: group_count_x as usize,
@@ -1564,6 +1670,9 @@ impl crate::CommandEncoder for super::CommandEncoder {
         mut offset: wgt::BufferAddress,
         draw_count: u32,
     ) {
+        if self.should_skip_render_commands() {
+            return;
+        }
         let encoder = self.state.render.as_ref().unwrap();
         for _ in 0..draw_count {
             unsafe {
@@ -1583,6 +1692,9 @@ impl crate::CommandEncoder for super::CommandEncoder {
         mut offset: wgt::BufferAddress,
         draw_count: u32,
     ) {
+        if self.should_skip_render_commands() {
+            return;
+        }
         let encoder = self.state.render.as_ref().unwrap();
         let index = self.state.index.as_ref().unwrap();
         for _ in 0..draw_count {
@@ -1606,6 +1718,9 @@ impl crate::CommandEncoder for super::CommandEncoder {
         mut offset: wgt::BufferAddress,
         draw_count: u32,
     ) {
+        if self.should_skip_render_commands() {
+            return;
+        }
         let encoder = self.state.render.as_ref().unwrap();
         for _ in 0..draw_count {
             unsafe {
@@ -1918,5 +2033,53 @@ impl Drop for super::CommandBuffer {
                 .fetch_sub(1, atomic::Ordering::AcqRel);
             debug_assert!(previous > 0);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{first_active_subpass_index, next_active_subpass_index};
+
+    #[test]
+    fn subpass_traversal_sequential() {
+        let mask = None;
+        assert_eq!(first_active_subpass_index(3, mask), Some(0));
+        assert_eq!(next_active_subpass_index(0, 3, mask), 1);
+        assert_eq!(next_active_subpass_index(1, 3, mask), 2);
+        assert_eq!(next_active_subpass_index(2, 3, mask), 3);
+    }
+
+    #[test]
+    fn subpass_traversal_skips_culled_middle() {
+        let mask = Some(
+            wgt::ActiveSubpassMask::NONE
+                .with(wgt::SubpassIndex(0))
+                .with(wgt::SubpassIndex(2)),
+        );
+        assert_eq!(first_active_subpass_index(3, mask), Some(0));
+        assert_eq!(next_active_subpass_index(0, 3, mask), 2);
+        assert_eq!(next_active_subpass_index(2, 3, mask), 3);
+    }
+
+    #[test]
+    fn subpass_traversal_skips_initial_culled() {
+        let mask = Some(
+            wgt::ActiveSubpassMask::NONE
+                .with(wgt::SubpassIndex(2))
+                .with(wgt::SubpassIndex(3)),
+        );
+        assert_eq!(first_active_subpass_index(4, mask), Some(2));
+    }
+
+    #[test]
+    fn subpass_traversal_all_culled() {
+        let mask = Some(wgt::ActiveSubpassMask::NONE);
+        assert_eq!(first_active_subpass_index(4, mask), None);
+    }
+
+    #[test]
+    fn subpass_traversal_single_pass_mode_unchanged() {
+        let mask = Some(wgt::ActiveSubpassMask::NONE);
+        assert_eq!(first_active_subpass_index(0, mask), None);
     }
 }

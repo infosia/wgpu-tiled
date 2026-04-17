@@ -20,8 +20,8 @@ use objc2_metal::{
     MTLRenderPipelineColorAttachmentDescriptorArray, MTLRenderPipelineDescriptor, MTLResource,
     MTLResourceID, MTLResourceOptions, MTLSamplerAddressMode, MTLSamplerDescriptor,
     MTLSamplerMipFilter, MTLSamplerState, MTLSize, MTLStencilDescriptor, MTLStorageMode,
-    MTLTexture, MTLTextureDescriptor, MTLTextureType, MTLTriangleFillMode, MTLVertexDescriptor,
-    MTLVertexStepFunction,
+    MTLTexture, MTLTextureDescriptor, MTLTextureType, MTLTextureUsage, MTLTriangleFillMode,
+    MTLVertexDescriptor, MTLVertexStepFunction,
 };
 
 use super::{conv, PassthroughShader, ShaderModuleSource};
@@ -685,9 +685,71 @@ impl crate::Device for super::Device {
     }
     unsafe fn create_transient_attachment(
         &self,
-        _desc: &wgt::TransientAttachmentDescriptor,
+        desc: &wgt::TransientAttachmentDescriptor,
     ) -> Result<super::TransientAttachment, crate::DeviceError> {
-        Err(crate::DeviceError::Unexpected)
+        let (width, height) = match desc.size {
+            wgt::TransientSize::Explicit { width, height } => (width, height),
+            wgt::TransientSize::MatchTarget => {
+                log::error!(
+                    "metal: create_transient_attachment received unresolved TransientSize::MatchTarget"
+                );
+                return Err(crate::DeviceError::Unexpected);
+            }
+        };
+        if width == 0 || height == 0 || desc.sample_count == 0 {
+            log::error!(
+                "metal: create_transient_attachment received invalid descriptor: width={}, height={}, sample_count={}",
+                width,
+                height,
+                desc.sample_count
+            );
+            return Err(crate::DeviceError::Unexpected);
+        }
+
+        let mtl_format = self
+            .shared
+            .private_texture_format_caps
+            .map_format(desc.format);
+
+        autoreleasepool(|_| {
+            let descriptor = MTLTextureDescriptor::new();
+            let mtl_type = if desc.sample_count > 1 {
+                unsafe { descriptor.setSampleCount(desc.sample_count as usize) };
+                MTLTextureType::Type2DMultisample
+            } else {
+                MTLTextureType::Type2D
+            };
+            let storage_mode = if self.shared.private_caps.supports_memoryless_storage {
+                MTLStorageMode::Memoryless
+            } else {
+                log::warn!(
+                    "metal: memoryless transient attachments are unsupported, falling back to private storage"
+                );
+                MTLStorageMode::Private
+            };
+
+            descriptor.setTextureType(mtl_type);
+            unsafe { descriptor.setWidth(width as usize) };
+            unsafe { descriptor.setHeight(height as usize) };
+            unsafe { descriptor.setMipmapLevelCount(1) };
+            descriptor.setPixelFormat(mtl_format);
+            descriptor.setUsage(MTLTextureUsage::RenderTarget);
+            descriptor.setStorageMode(storage_mode);
+
+            let raw = self
+                .shared
+                .device
+                .newTextureWithDescriptor(&descriptor)
+                .ok_or(crate::DeviceError::OutOfMemory)?;
+
+            Ok(super::TransientAttachment {
+                raw,
+                format: desc.format,
+                width,
+                height,
+                sample_count: desc.sample_count,
+            })
+        })
     }
     unsafe fn destroy_transient_attachment(&self, _resource: super::TransientAttachment) {}
     unsafe fn create_transient_dispatch(
@@ -1549,6 +1611,8 @@ impl crate::Device for super::Device {
             };
 
             // Setup pipeline color attachments
+            // TODO(Phase 12): apply subpass-target write-mask muting to prevent color slot bleed
+            // across subpasses in a single Metal encoder.
             for (i, ct) in desc.color_targets.iter().enumerate() {
                 let at_descriptor =
                     unsafe { descriptor.colorAttachments().objectAtIndexedSubscript(i) };

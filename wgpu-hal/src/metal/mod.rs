@@ -690,9 +690,19 @@ unsafe impl Send for TextureView {}
 unsafe impl Sync for TextureView {}
 
 #[derive(Debug)]
-pub struct TransientAttachment;
+#[allow(dead_code)]
+pub struct TransientAttachment {
+    raw: Retained<ProtocolObject<dyn MTLTexture>>,
+    format: wgt::TextureFormat,
+    width: u32,
+    height: u32,
+    sample_count: u32,
+}
 
 impl crate::DynTransientAttachment for TransientAttachment {}
+
+unsafe impl Send for TransientAttachment {}
+unsafe impl Sync for TransientAttachment {}
 
 #[derive(Debug)]
 pub struct TransientDispatch;
@@ -1119,6 +1129,9 @@ struct CommandState {
 
     /// Timer query that should be executed when the next pass starts.
     pending_timer_queries: Vec<(QuerySet, u32)>,
+    active_subpass_index: Option<u32>,
+    subpass_count: u32,
+    active_subpass_mask: Option<wgt::ActiveSubpassMask>,
 }
 
 pub struct CommandEncoder {
