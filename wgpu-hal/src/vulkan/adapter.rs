@@ -1638,6 +1638,10 @@ impl PhysicalDeviceProperties {
                 / 4
                 - 1, // -1 for position
             max_color_attachments,
+            max_subpass_color_attachments: 0,
+            max_subpasses: 0,
+            max_input_attachments: 0,
+            estimated_tile_memory_bytes: 0,
             max_color_attachment_bytes_per_sample,
             max_compute_workgroup_storage_size: limits.max_compute_shared_memory_size,
             max_compute_invocations_per_workgroup: limits.max_compute_work_group_invocations,

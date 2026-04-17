@@ -916,6 +916,10 @@ impl super::Adapter {
                     max_dynamic_storage_buffers_per_pipeline_layout,
                     // 8
                     max_color_attachments: Direct3D12::D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT,
+                    max_subpass_color_attachments: 0,
+                    max_subpasses: 0,
+                    max_input_attachments: 0,
+                    estimated_tile_memory_bytes: 0,
                     // 128 (No documented limit)
                     max_color_attachment_bytes_per_sample:
                         Direct3D12::D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT

@@ -860,6 +860,16 @@ bitflags_array! {
         /// This is a native only feature.
         #[name("wgpu-partially-bound-binding-array", "partially-bound-binding-array")]
         const PARTIALLY_BOUND_BINDING_ARRAY = 1 << 13;
+        /// Enables multi-subpass render pass support.
+        ///
+        /// Supported platforms:
+        /// - Vulkan
+        /// - Metal (where supported by adapter capabilities)
+        /// - GLES (native or emulated paths)
+        ///
+        /// This is a native only feature.
+        #[name("wgpu-multi-subpass")]
+        const MULTI_SUBPASS = 1 << 14;
         /// Allows the user to call [`RenderPass::multi_draw_indirect_count`] and [`RenderPass::multi_draw_indexed_indirect_count`].
         ///
         /// This allows the use of a buffer containing the actual number of draw calls. This feature being present also implies
@@ -878,6 +888,13 @@ bitflags_array! {
         #[doc = link_to_wgpu_docs!(["`RenderPass::multi_draw_indexed_indirect_count`"]: "struct.RenderPass.html#method.multi_draw_indexed_indirect_count")]
         #[name("wgpu-multi-draw-indirect-count", "multi-draw-indirect-count")]
         const MULTI_DRAW_INDIRECT_COUNT = 1 << 15;
+        /// Enables programmable tile dispatch functionality.
+        ///
+        /// This is reserved for future backend implementations.
+        ///
+        /// This is a native only feature.
+        #[name("wgpu-programmable-tile-dispatch")]
+        const PROGRAMMABLE_TILE_DISPATCH = 1 << 16;
         /// Allows the use of [`AddressMode::ClampToBorder`] with a border color
         /// of [`SamplerBorderColor::Zero`].
         ///
@@ -967,6 +984,14 @@ bitflags_array! {
         /// This is a native only feature.
         #[name("wgpu-clear-texture", "clear-texture")]
         const CLEAR_TEXTURE = 1 << 23;
+        /// Enables framebuffer fetch support in fragment shaders.
+        ///
+        /// Supported platforms:
+        /// - GLES (when `GL_EXT_shader_framebuffer_fetch` is supported)
+        ///
+        /// This is a native only feature.
+        #[name("wgpu-framebuffer-fetch")]
+        const FRAMEBUFFER_FETCH = 1 << 24;
         /// Enables multiview render passes and `builtin(view_index)` in vertex/mesh shaders.
         ///
         /// Supported platforms:
@@ -1070,8 +1095,11 @@ bitflags_array! {
         /// This is a native only feature.
         #[name("wgpu-shader-i16", "shader-i16")]
         const SHADER_I16 = 1 << 34;
-
-        // Bit 35 (formerly SHADER_PRIMITIVE_INDEX) is available.
+        /// Enables transient render attachments.
+        ///
+        /// This is a native only feature.
+        #[name("wgpu-transient-attachments")]
+        const TRANSIENT_ATTACHMENTS = 1 << 35;
 
         /// Allows shaders to use the `early_depth_test` attribute.
         ///
@@ -1444,7 +1472,7 @@ bitflags_array! {
         #[name("wgpu-memory-decoration-volatile")]
         const MEMORY_DECORATION_VOLATILE = 1 << 62;
 
-        // Adding a new feature? Bit 35 (formerly SHADER_PRIMITIVE_INDEX) is available.
+        // Adding a new feature? Bit 63 is available.
     }
 
     /// Features that are not guaranteed to be supported.
@@ -2026,6 +2054,54 @@ mod tests {
             let prefixed_with_experimental = name.starts_with("EXPERIMENTAL_");
             let in_experimental_mask = Features::all_experimental_mask().contains(feature);
             assert_eq!(in_experimental_mask, prefixed_with_experimental);
+        }
+    }
+
+    #[test]
+    fn tiled_feature_bit_positions() {
+        assert_eq!(FeaturesWGPU::MULTI_SUBPASS.bits(), 1 << 14);
+        assert_eq!(FeaturesWGPU::PROGRAMMABLE_TILE_DISPATCH.bits(), 1 << 16);
+        assert_eq!(FeaturesWGPU::FRAMEBUFFER_FETCH.bits(), 1 << 24);
+        assert_eq!(FeaturesWGPU::TRANSIENT_ATTACHMENTS.bits(), 1 << 35);
+    }
+
+    #[test]
+    fn tiled_features_roundtrip_from_names() {
+        for feature in [
+            Features::MULTI_SUBPASS,
+            Features::PROGRAMMABLE_TILE_DISPATCH,
+            Features::FRAMEBUFFER_FETCH,
+            Features::TRANSIENT_ATTACHMENTS,
+        ] {
+            let name = feature
+                .as_str()
+                .expect("single feature should have a stable name");
+            assert_eq!(name.parse(), Ok(feature));
+        }
+    }
+
+    #[test]
+    fn tiled_features_are_native_only() {
+        for feature in [
+            Features::MULTI_SUBPASS,
+            Features::PROGRAMMABLE_TILE_DISPATCH,
+            Features::FRAMEBUFFER_FETCH,
+            Features::TRANSIENT_ATTACHMENTS,
+        ] {
+            assert!(Features::all_native_mask().contains(feature));
+            assert!(!Features::all_webgpu_mask().contains(feature));
+        }
+    }
+
+    #[test]
+    fn tiled_features_not_experimental() {
+        for feature in [
+            Features::MULTI_SUBPASS,
+            Features::PROGRAMMABLE_TILE_DISPATCH,
+            Features::FRAMEBUFFER_FETCH,
+            Features::TRANSIENT_ATTACHMENTS,
+        ] {
+            assert!(!Features::all_experimental_mask().contains(feature));
         }
     }
 }

@@ -52,6 +52,9 @@ macro_rules! with_limits {
         $macro_name!(min_uniform_buffer_offset_alignment, Ordering::Greater);
         $macro_name!(min_storage_buffer_offset_alignment, Ordering::Greater);
         $macro_name!(max_color_attachments, Ordering::Less);
+        $macro_name!(max_subpass_color_attachments, Ordering::Less);
+        $macro_name!(max_subpasses, Ordering::Less);
+        $macro_name!(max_input_attachments, Ordering::Less);
         $macro_name!(max_color_attachment_bytes_per_sample, Ordering::Less);
         $macro_name!(max_compute_workgroup_storage_size, Ordering::Less);
         $macro_name!(max_compute_invocations_per_workgroup, Ordering::Less);
@@ -203,6 +206,17 @@ pub struct Limits {
     pub min_storage_buffer_offset_alignment: u32,
     /// The maximum allowed number of color attachments.
     pub max_color_attachments: u32,
+    /// The maximum allowed number of color attachments per subpass.
+    pub max_subpass_color_attachments: u32,
+    /// The maximum allowed number of subpasses in a render pass.
+    pub max_subpasses: u32,
+    /// The maximum allowed number of input attachments per subpass.
+    pub max_input_attachments: u32,
+    /// Estimated tile memory size in bytes.
+    ///
+    /// This is advisory and is not treated as a hard validation limit.
+    /// It is intentionally excluded from `with_limits!` comparisons.
+    pub estimated_tile_memory_bytes: u32,
     /// The maximum number of bytes necessary to hold one sample (pixel or subpixel) of render
     /// pipeline output data, across all color attachments as described by [`TextureFormat::target_pixel_byte_cost`]
     /// and [`TextureFormat::target_component_alignment`]. Defaults to 32. Higher is "better".
@@ -339,6 +353,10 @@ impl Limits {
     ///     min_uniform_buffer_offset_alignment: 256,
     ///     min_storage_buffer_offset_alignment: 256,
     ///     max_color_attachments: 8,
+    ///     max_subpass_color_attachments: 0,
+    ///     max_subpasses: 0,
+    ///     max_input_attachments: 0,
+    ///     estimated_tile_memory_bytes: 0,
     ///     max_color_attachment_bytes_per_sample: 32,
     ///     max_compute_workgroup_storage_size: 16384,
     ///     max_compute_invocations_per_workgroup: 256,
@@ -398,6 +416,10 @@ impl Limits {
             min_uniform_buffer_offset_alignment: 256,
             min_storage_buffer_offset_alignment: 256,
             max_color_attachments: 8,
+            max_subpass_color_attachments: 0,
+            max_subpasses: 0,
+            max_input_attachments: 0,
+            estimated_tile_memory_bytes: 0,
             max_color_attachment_bytes_per_sample: 32,
             max_compute_workgroup_storage_size: 16384,
             max_compute_invocations_per_workgroup: 256,
@@ -461,6 +483,10 @@ impl Limits {
     ///     min_storage_buffer_offset_alignment: 256,
     ///     max_inter_stage_shader_variables: 15,
     ///     max_color_attachments: 4,
+    ///     max_subpass_color_attachments: 0,
+    ///     max_subpasses: 0,
+    ///     max_input_attachments: 0,
+    ///     estimated_tile_memory_bytes: 0,
     ///     max_color_attachment_bytes_per_sample: 32,
     ///     max_compute_workgroup_storage_size: 16352, // *
     ///     max_compute_invocations_per_workgroup: 256,
@@ -540,6 +566,10 @@ impl Limits {
     ///     min_storage_buffer_offset_alignment: 256,
     ///     max_inter_stage_shader_variables: 15,
     ///     max_color_attachments: 4,
+    ///     max_subpass_color_attachments: 0,
+    ///     max_subpasses: 0,
+    ///     max_input_attachments: 0,
+    ///     estimated_tile_memory_bytes: 0,
     ///     max_color_attachment_bytes_per_sample: 32,
     ///     max_compute_workgroup_storage_size: 0, // +
     ///     max_compute_invocations_per_workgroup: 0, // +

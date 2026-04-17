@@ -42,6 +42,12 @@ Bottom level categories:
 
 ## Unreleased
 
+### Added/New Features
+
+#### General
+
+- Added foundational tiled-rendering API surface in `wgpu-types`: transient attachment descriptors/ops, subpass descriptors/dependencies/layout metadata, active subpass masks, and new related feature/limit fields.
+
 ## v29.0.1 (2026-03-26)
 
 This release includes `wgpu-core`, `wgpu-hal` and `wgpu-types` version `29.0.1`. All other crates remain at their previous versions.

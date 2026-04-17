@@ -1222,6 +1222,10 @@ impl super::CapabilitiesQuery {
             min_uniform_buffer_offset_alignment: self.buffer_alignment as u32,
             min_storage_buffer_offset_alignment: self.buffer_alignment as u32,
             max_color_attachments: self.max_color_render_targets as u32,
+            max_subpass_color_attachments: 0,
+            max_subpasses: 0,
+            max_input_attachments: 0,
+            estimated_tile_memory_bytes: 0,
             max_color_attachment_bytes_per_sample: self.max_color_attachment_bytes_per_sample
                 as u32,
             max_compute_workgroup_storage_size: self.max_total_threadgroup_memory,
