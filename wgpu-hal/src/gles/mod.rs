@@ -156,6 +156,8 @@ impl crate::Api for Api {
     type Texture = Texture;
     type SurfaceTexture = Texture;
     type TextureView = TextureView;
+    type TransientAttachment = TransientAttachment;
+    type TransientDispatch = TransientDispatch;
     type Sampler = Sampler;
     type QuerySet = QuerySet;
     type Fence = Fence;
@@ -191,7 +193,9 @@ crate::impl_dyn_resource!(
     ShaderModule,
     Surface,
     Texture,
-    TextureView
+    TextureView,
+    TransientAttachment,
+    TransientDispatch
 );
 
 bitflags::bitflags! {
@@ -527,6 +531,16 @@ pub struct TextureView {
 }
 
 impl crate::DynTextureView for TextureView {}
+
+#[derive(Debug)]
+pub struct TransientAttachment;
+
+impl crate::DynTransientAttachment for TransientAttachment {}
+
+#[derive(Debug)]
+pub struct TransientDispatch;
+
+impl crate::DynTransientDispatch for TransientDispatch {}
 
 #[derive(Debug)]
 pub struct Sampler {

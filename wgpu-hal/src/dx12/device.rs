@@ -780,6 +780,20 @@ impl crate::Device for super::Device {
             .destroy_sampler(sampler.desc, sampler.index);
         self.counters.samplers.sub(1);
     }
+    unsafe fn create_transient_attachment(
+        &self,
+        _desc: &wgt::TransientAttachmentDescriptor,
+    ) -> Result<super::TransientAttachment, crate::DeviceError> {
+        Err(crate::DeviceError::Unexpected)
+    }
+    unsafe fn destroy_transient_attachment(&self, _resource: super::TransientAttachment) {}
+    unsafe fn create_transient_dispatch(
+        &self,
+        _desc: &wgt::TransientDispatchDescriptor,
+    ) -> Result<super::TransientDispatch, crate::DeviceError> {
+        Err(crate::DeviceError::Unexpected)
+    }
+    unsafe fn destroy_transient_dispatch(&self, _resource: super::TransientDispatch) {}
 
     unsafe fn create_command_encoder(
         &self,

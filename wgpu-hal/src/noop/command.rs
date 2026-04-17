@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 use core::mem;
 use core::ops::Range;
 
-use super::{Api, Buffer, DeviceResult, Resource};
+use super::{Api, Buffer, DeviceResult, Resource, TransientDispatch};
 
 /// Command buffer type, which performs double duty as the command encoder type too.
 #[derive(Debug)]
@@ -153,6 +153,12 @@ impl crate::CommandEncoder for CommandBuffer {
         Ok(())
     }
     unsafe fn end_render_pass(&mut self) {}
+    unsafe fn next_subpass(&mut self) {
+        unreachable!()
+    }
+    unsafe fn dispatch_transient(&mut self, _dispatch: &TransientDispatch) {
+        unreachable!()
+    }
 
     unsafe fn set_bind_group(
         &mut self,

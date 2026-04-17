@@ -290,6 +290,7 @@ pub use dynamic::{
     DynDevice, DynExposedAdapter, DynFence, DynInstance, DynOpenDevice, DynPipelineCache,
     DynPipelineLayout, DynQuerySet, DynQueue, DynRenderPipeline, DynResource, DynSampler,
     DynShaderModule, DynSurface, DynSurfaceTexture, DynTexture, DynTextureView,
+    DynTransientAttachment, DynTransientDispatch,
 };
 
 #[allow(unused)]
@@ -612,6 +613,8 @@ pub trait Api: Clone + fmt::Debug + Sized + WasmNotSendSync + 'static {
     type Texture: DynTexture;
     type SurfaceTexture: DynSurfaceTexture + Borrow<Self::Texture>;
     type TextureView: DynTextureView;
+    type TransientAttachment: DynTransientAttachment;
+    type TransientDispatch: DynTransientDispatch;
     type Sampler: DynSampler;
     type QuerySet: DynQuerySet;
 
@@ -1001,6 +1004,16 @@ pub trait Device: WasmNotSendSync {
         desc: &SamplerDescriptor,
     ) -> Result<<Self::A as Api>::Sampler, DeviceError>;
     unsafe fn destroy_sampler(&self, sampler: <Self::A as Api>::Sampler);
+    unsafe fn create_transient_attachment(
+        &self,
+        desc: &wgt::TransientAttachmentDescriptor,
+    ) -> Result<<Self::A as Api>::TransientAttachment, DeviceError>;
+    unsafe fn destroy_transient_attachment(&self, resource: <Self::A as Api>::TransientAttachment);
+    unsafe fn create_transient_dispatch(
+        &self,
+        desc: &wgt::TransientDispatchDescriptor,
+    ) -> Result<<Self::A as Api>::TransientDispatch, DeviceError>;
+    unsafe fn destroy_transient_dispatch(&self, resource: <Self::A as Api>::TransientDispatch);
 
     /// Create a fresh [`CommandEncoder`].
     ///
@@ -1566,6 +1579,8 @@ pub trait CommandEncoder: WasmNotSendSync + fmt::Debug {
     /// [`begin_render_pass`]: CommandEncoder::begin_render_pass
     /// [`end_render_pass`]: CommandEncoder::end_render_pass
     unsafe fn end_render_pass(&mut self);
+    unsafe fn next_subpass(&mut self);
+    unsafe fn dispatch_transient(&mut self, dispatch: &<Self::A as Api>::TransientDispatch);
 
     unsafe fn set_render_pipeline(&mut self, pipeline: &<Self::A as Api>::RenderPipeline);
 
@@ -2646,6 +2661,46 @@ pub struct DepthStencilAttachment<'a, T: DynTextureView + ?Sized> {
 }
 
 #[derive(Clone, Debug)]
+pub enum SubpassColorAttachment<'a, T: DynTextureView + ?Sized> {
+    Persistent(ColorAttachment<'a, T>),
+    Transient {
+        transient_index: u32,
+        ops: wgt::TransientOps<wgt::Color>,
+        clear_value: wgt::Color,
+    },
+}
+
+#[derive(Clone, Debug)]
+pub enum SubpassDepthStencilAttachment<'a, T: DynTextureView + ?Sized> {
+    Persistent(DepthStencilAttachment<'a, T>),
+    Transient {
+        transient_index: u32,
+        depth_ops: wgt::TransientOps<f32>,
+        stencil_ops: wgt::TransientOps<u32>,
+        clear_value: (f32, u32),
+    },
+}
+
+#[derive(Clone, Debug)]
+pub struct Subpass<'a, T: DynTextureView + ?Sized> {
+    pub color_attachments: &'a [Option<SubpassColorAttachment<'a, T>>],
+    pub color_attachment_indices: &'a [u32],
+    pub depth_stencil_attachment: Option<SubpassDepthStencilAttachment<'a, T>>,
+    pub input_attachments: &'a [wgt::SubpassInputAttachment],
+}
+
+impl<'a, T: DynTextureView + ?Sized> Default for Subpass<'a, T> {
+    fn default() -> Self {
+        Self {
+            color_attachments: &[],
+            color_attachment_indices: &[],
+            depth_stencil_attachment: None,
+            input_attachments: &[],
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct PassTimestampWrites<'a, Q: DynQuerySet + ?Sized> {
     pub query_set: &'a Q,
     pub beginning_of_pass_write_index: Option<u32>,
@@ -2659,9 +2714,34 @@ pub struct RenderPassDescriptor<'a, Q: DynQuerySet + ?Sized, T: DynTextureView +
     pub sample_count: u32,
     pub color_attachments: &'a [Option<ColorAttachment<'a, T>>],
     pub depth_stencil_attachment: Option<DepthStencilAttachment<'a, T>>,
+    pub subpasses: &'a [Subpass<'a, T>],
+    pub subpass_dependencies: &'a [wgt::SubpassDependency],
+    pub transient_memory_hint: wgt::TransientMemoryHint,
+    pub active_subpass_mask: Option<wgt::ActiveSubpassMask>,
     pub multiview_mask: Option<NonZeroU32>,
     pub timestamp_writes: Option<PassTimestampWrites<'a, Q>>,
     pub occlusion_query_set: Option<&'a Q>,
+}
+
+impl<'a, Q: DynQuerySet + ?Sized, T: DynTextureView + ?Sized> Default
+    for RenderPassDescriptor<'a, Q, T>
+{
+    fn default() -> Self {
+        Self {
+            label: None,
+            extent: wgt::Extent3d::default(),
+            sample_count: 1,
+            color_attachments: &[],
+            depth_stencil_attachment: None,
+            subpasses: &[],
+            subpass_dependencies: &[],
+            transient_memory_hint: wgt::TransientMemoryHint::Auto,
+            active_subpass_mask: None,
+            multiview_mask: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -2674,6 +2754,142 @@ pub struct ComputePassDescriptor<'a, Q: DynQuerySet + ?Sized> {
 fn test_default_limits() {
     let limits = wgt::Limits::default();
     assert!(limits.max_bind_groups <= MAX_BIND_GROUPS as u32);
+}
+
+#[test]
+fn test_subpass_default() {
+    let subpass = Subpass::<'_, dyn DynTextureView>::default();
+    assert!(subpass.color_attachments.is_empty());
+    assert!(subpass.color_attachment_indices.is_empty());
+    assert!(subpass.depth_stencil_attachment.is_none());
+    assert!(subpass.input_attachments.is_empty());
+}
+
+#[test]
+fn test_render_pass_descriptor_default_is_legacy_mode() {
+    let desc = RenderPassDescriptor::<'_, dyn DynQuerySet, dyn DynTextureView>::default();
+    assert!(desc.subpasses.is_empty());
+    assert!(desc.subpass_dependencies.is_empty());
+    assert!(desc.active_subpass_mask.is_none());
+    assert_eq!(desc.transient_memory_hint, wgt::TransientMemoryHint::Auto);
+}
+
+#[test]
+fn test_subpass_color_attachment_transient_fields() {
+    let attachment: SubpassColorAttachment<'_, dyn DynTextureView> =
+        SubpassColorAttachment::Transient {
+            transient_index: 3,
+            ops: wgt::TransientOps {
+                load: wgt::TransientLoadOp::DontCare,
+            },
+            clear_value: wgt::Color::RED,
+        };
+    match attachment {
+        SubpassColorAttachment::Persistent(_) => unreachable!(),
+        SubpassColorAttachment::Transient {
+            transient_index,
+            ops,
+            clear_value,
+        } => {
+            assert_eq!(transient_index, 3);
+            assert_eq!(ops.load, wgt::TransientLoadOp::DontCare);
+            assert_eq!(clear_value, wgt::Color::RED);
+        }
+    }
+}
+
+#[test]
+fn test_subpass_depth_stencil_attachment_transient_fields() {
+    let attachment: SubpassDepthStencilAttachment<'_, dyn DynTextureView> =
+        SubpassDepthStencilAttachment::Transient {
+            transient_index: 7,
+            depth_ops: wgt::TransientOps {
+                load: wgt::TransientLoadOp::DontCare,
+            },
+            stencil_ops: wgt::TransientOps {
+                load: wgt::TransientLoadOp::Clear(42),
+            },
+            clear_value: (0.5, 9),
+        };
+    match attachment {
+        SubpassDepthStencilAttachment::Persistent(_) => unreachable!(),
+        SubpassDepthStencilAttachment::Transient {
+            transient_index,
+            depth_ops,
+            stencil_ops,
+            clear_value,
+        } => {
+            assert_eq!(transient_index, 7);
+            assert_eq!(depth_ops.load, wgt::TransientLoadOp::DontCare);
+            assert_eq!(stencil_ops.load, wgt::TransientLoadOp::Clear(42));
+            assert_eq!(clear_value, (0.5, 9));
+        }
+    }
+}
+
+#[test]
+fn test_subpass_color_attachment_persistent_round_trip() {
+    let view = noop::Resource;
+    let view_dyn: &dyn DynTextureView = &view;
+    let attachment = SubpassColorAttachment::Persistent(ColorAttachment {
+        target: Attachment {
+            view: view_dyn,
+            usage: wgt::TextureUses::COLOR_TARGET,
+        },
+        depth_slice: Some(2),
+        resolve_target: None,
+        ops: AttachmentOps::LOAD | AttachmentOps::STORE,
+        clear_value: wgt::Color::GREEN,
+    });
+    let downcast = attachment.expect_downcast::<noop::Resource>();
+    match downcast {
+        SubpassColorAttachment::Persistent(color) => {
+            assert!(core::ptr::eq(color.target.view, &view));
+            assert_eq!(color.target.usage, wgt::TextureUses::COLOR_TARGET);
+            assert_eq!(color.depth_slice, Some(2));
+            assert_eq!(color.clear_value, wgt::Color::GREEN);
+        }
+        SubpassColorAttachment::Transient { .. } => unreachable!(),
+    }
+}
+
+#[test]
+fn test_subpass_depth_stencil_attachment_persistent_round_trip() {
+    let view = noop::Resource;
+    let view_dyn: &dyn DynTextureView = &view;
+    let attachment = SubpassDepthStencilAttachment::Persistent(DepthStencilAttachment {
+        target: Attachment {
+            view: view_dyn,
+            usage: wgt::TextureUses::DEPTH_STENCIL_WRITE,
+        },
+        depth_ops: AttachmentOps::LOAD | AttachmentOps::STORE,
+        stencil_ops: AttachmentOps::LOAD | AttachmentOps::STORE,
+        clear_value: (0.25, 5),
+    });
+    let downcast = attachment.expect_downcast::<noop::Resource>();
+    match downcast {
+        SubpassDepthStencilAttachment::Persistent(depth_stencil) => {
+            assert!(core::ptr::eq(depth_stencil.target.view, &view));
+            assert_eq!(
+                depth_stencil.target.usage,
+                wgt::TextureUses::DEPTH_STENCIL_WRITE
+            );
+            assert_eq!(depth_stencil.clear_value, (0.25, 5));
+        }
+        SubpassDepthStencilAttachment::Transient { .. } => unreachable!(),
+    }
+}
+
+#[test]
+fn test_active_subpass_mask_none_defaults_to_all() {
+    let desc = RenderPassDescriptor::<'_, dyn DynQuerySet, dyn DynTextureView> {
+        active_subpass_mask: None,
+        ..Default::default()
+    };
+    let mask = desc
+        .active_subpass_mask
+        .unwrap_or(wgt::ActiveSubpassMask::ALL);
+    assert_eq!(mask, wgt::ActiveSubpassMask::ALL);
 }
 
 #[derive(Clone, Debug)]

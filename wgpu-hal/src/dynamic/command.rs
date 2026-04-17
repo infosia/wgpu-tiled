@@ -5,13 +5,14 @@ use crate::{
     AccelerationStructureBarrier, Api, Attachment, BufferBarrier, BufferBinding, BufferCopy,
     BufferTextureCopy, BuildAccelerationStructureDescriptor, ColorAttachment, CommandEncoder,
     ComputePassDescriptor, DepthStencilAttachment, DeviceError, Label, MemoryRange,
-    PassTimestampWrites, Rect, RenderPassDescriptor, TextureBarrier, TextureCopy,
+    PassTimestampWrites, Rect, RenderPassDescriptor, Subpass, SubpassColorAttachment,
+    SubpassDepthStencilAttachment, TextureBarrier, TextureCopy,
 };
 
 use super::{
     DynAccelerationStructure, DynBindGroup, DynBuffer, DynCommandBuffer, DynComputePipeline,
     DynPipelineLayout, DynQuerySet, DynRenderPipeline, DynResource, DynResourceExt as _,
-    DynTexture, DynTextureView,
+    DynTexture, DynTextureView, DynTransientDispatch,
 };
 
 pub trait DynCommandEncoder: DynResource + core::fmt::Debug {
@@ -95,6 +96,8 @@ pub trait DynCommandEncoder: DynResource + core::fmt::Debug {
         desc: &RenderPassDescriptor<dyn DynQuerySet, dyn DynTextureView>,
     ) -> Result<(), DeviceError>;
     unsafe fn end_render_pass(&mut self);
+    unsafe fn next_subpass(&mut self);
+    unsafe fn dispatch_transient(&mut self, dispatch: &dyn DynTransientDispatch);
 
     unsafe fn set_render_pipeline(&mut self, pipeline: &dyn DynRenderPipeline);
 
@@ -399,6 +402,35 @@ impl<C: CommandEncoder + DynResource> DynCommandEncoder for C {
                     .map(|attachment| attachment.expect_downcast())
             })
             .collect::<Vec<_>>();
+        let subpass_color_attachments = desc
+            .subpasses
+            .iter()
+            .map(|subpass| {
+                subpass
+                    .color_attachments
+                    .iter()
+                    .map(|attachment| {
+                        attachment
+                            .as_ref()
+                            .map(|attachment| attachment.expect_downcast())
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let subpasses = desc
+            .subpasses
+            .iter()
+            .zip(subpass_color_attachments.iter())
+            .map(|(subpass, color_attachments)| Subpass {
+                color_attachments,
+                color_attachment_indices: subpass.color_attachment_indices,
+                depth_stencil_attachment: subpass
+                    .depth_stencil_attachment
+                    .as_ref()
+                    .map(|attachment| attachment.expect_downcast()),
+                input_attachments: subpass.input_attachments,
+            })
+            .collect::<Vec<_>>();
 
         let desc: RenderPassDescriptor<<C::A as Api>::QuerySet, <C::A as Api>::TextureView> =
             RenderPassDescriptor {
@@ -410,6 +442,10 @@ impl<C: CommandEncoder + DynResource> DynCommandEncoder for C {
                     .depth_stencil_attachment
                     .as_ref()
                     .map(|ds| ds.expect_downcast()),
+                subpasses: &subpasses,
+                subpass_dependencies: desc.subpass_dependencies,
+                transient_memory_hint: desc.transient_memory_hint,
+                active_subpass_mask: desc.active_subpass_mask,
                 multiview_mask: desc.multiview_mask,
                 timestamp_writes: desc
                     .timestamp_writes
@@ -426,6 +462,17 @@ impl<C: CommandEncoder + DynResource> DynCommandEncoder for C {
         unsafe {
             C::end_render_pass(self);
         }
+    }
+
+    unsafe fn next_subpass(&mut self) {
+        unsafe {
+            C::next_subpass(self);
+        }
+    }
+
+    unsafe fn dispatch_transient(&mut self, dispatch: &dyn DynTransientDispatch) {
+        let dispatch = dispatch.expect_downcast_ref();
+        unsafe { C::dispatch_transient(self, dispatch) };
     }
 
     unsafe fn set_viewport(&mut self, rect: &Rect<f32>, depth_range: Range<f32>) {
@@ -756,6 +803,48 @@ impl<'a> DepthStencilAttachment<'a, dyn DynTextureView> {
             depth_ops: self.depth_ops,
             stencil_ops: self.stencil_ops,
             clear_value: self.clear_value,
+        }
+    }
+}
+
+impl<'a> SubpassColorAttachment<'a, dyn DynTextureView> {
+    pub fn expect_downcast<B: DynTextureView>(&self) -> SubpassColorAttachment<'a, B> {
+        match self {
+            Self::Persistent(attachment) => {
+                SubpassColorAttachment::Persistent(attachment.expect_downcast())
+            }
+            Self::Transient {
+                transient_index,
+                ops,
+                clear_value,
+            } => SubpassColorAttachment::Transient {
+                transient_index: *transient_index,
+                // `TransientOps`/`Color` are Copy; keep this conversion allocation-free.
+                ops: *ops,
+                clear_value: *clear_value,
+            },
+        }
+    }
+}
+
+impl<'a> SubpassDepthStencilAttachment<'a, dyn DynTextureView> {
+    pub fn expect_downcast<B: DynTextureView>(&self) -> SubpassDepthStencilAttachment<'a, B> {
+        match self {
+            Self::Persistent(attachment) => {
+                SubpassDepthStencilAttachment::Persistent(attachment.expect_downcast())
+            }
+            Self::Transient {
+                transient_index,
+                depth_ops,
+                stencil_ops,
+                clear_value,
+            } => SubpassDepthStencilAttachment::Transient {
+                transient_index: *transient_index,
+                // `TransientOps` is Copy for both scalar variants.
+                depth_ops: *depth_ops,
+                stencil_ops: *stencil_ops,
+                clear_value: *clear_value,
+            },
         }
     }
 }

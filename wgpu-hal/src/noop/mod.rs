@@ -22,6 +22,10 @@ pub struct Context;
 pub struct Encoder;
 #[derive(Debug)]
 pub struct Resource;
+#[derive(Debug)]
+pub struct TransientAttachment;
+#[derive(Debug)]
+pub struct TransientDispatch;
 
 #[derive(Debug)]
 pub struct Fence {
@@ -46,6 +50,8 @@ impl crate::Api for Api {
     type Texture = Resource;
     type SurfaceTexture = Resource;
     type TextureView = Resource;
+    type TransientAttachment = TransientAttachment;
+    type TransientDispatch = TransientDispatch;
     type Sampler = Resource;
     type QuerySet = Resource;
     type Fence = Fence;
@@ -60,7 +66,15 @@ impl crate::Api for Api {
     type ComputePipeline = Resource;
 }
 
-crate::impl_dyn_resource!(Buffer, CommandBuffer, Context, Fence, Resource);
+crate::impl_dyn_resource!(
+    Buffer,
+    CommandBuffer,
+    Context,
+    Fence,
+    Resource,
+    TransientAttachment,
+    TransientDispatch
+);
 
 impl crate::DynAccelerationStructure for Resource {}
 impl crate::DynBindGroup for Resource {}
@@ -78,6 +92,8 @@ impl crate::DynShaderModule for Resource {}
 impl crate::DynSurfaceTexture for Resource {}
 impl crate::DynTexture for Resource {}
 impl crate::DynTextureView for Resource {}
+impl crate::DynTransientAttachment for TransientAttachment {}
+impl crate::DynTransientDispatch for TransientDispatch {}
 
 impl core::borrow::Borrow<dyn crate::DynTexture> for Resource {
     fn borrow(&self) -> &dyn crate::DynTexture {
@@ -381,6 +397,20 @@ impl crate::Device for Context {
         Ok(Resource)
     }
     unsafe fn destroy_sampler(&self, sampler: Resource) {}
+    unsafe fn create_transient_attachment(
+        &self,
+        _desc: &wgt::TransientAttachmentDescriptor,
+    ) -> DeviceResult<TransientAttachment> {
+        Err(crate::DeviceError::Unexpected)
+    }
+    unsafe fn destroy_transient_attachment(&self, _resource: TransientAttachment) {}
+    unsafe fn create_transient_dispatch(
+        &self,
+        _desc: &wgt::TransientDispatchDescriptor,
+    ) -> DeviceResult<TransientDispatch> {
+        Err(crate::DeviceError::Unexpected)
+    }
+    unsafe fn destroy_transient_dispatch(&self, _resource: TransientDispatch) {}
 
     unsafe fn create_command_encoder(
         &self,

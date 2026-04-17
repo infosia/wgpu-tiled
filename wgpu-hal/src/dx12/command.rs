@@ -1119,6 +1119,12 @@ impl crate::CommandEncoder for super::CommandEncoder {
 
         unsafe { self.end_pass() };
     }
+    unsafe fn next_subpass(&mut self) {
+        unreachable!()
+    }
+    unsafe fn dispatch_transient(&mut self, _dispatch: &super::TransientDispatch) {
+        unreachable!()
+    }
 
     unsafe fn set_bind_group(
         &mut self,

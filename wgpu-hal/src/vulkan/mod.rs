@@ -80,6 +80,8 @@ impl crate::Api for Api {
     type Texture = Texture;
     type SurfaceTexture = SurfaceTexture;
     type TextureView = TextureView;
+    type TransientAttachment = TransientAttachment;
+    type TransientDispatch = TransientDispatch;
     type Sampler = Sampler;
     type QuerySet = QuerySet;
     type Fence = Fence;
@@ -116,7 +118,9 @@ crate::impl_dyn_resource!(
     Surface,
     SurfaceTexture,
     Texture,
-    TextureView
+    TextureView,
+    TransientAttachment,
+    TransientDispatch
 );
 
 struct DebugUtils {
@@ -767,6 +771,16 @@ pub struct TextureView {
 }
 
 impl crate::DynTextureView for TextureView {}
+
+#[derive(Debug)]
+pub struct TransientAttachment;
+
+impl crate::DynTransientAttachment for TransientAttachment {}
+
+#[derive(Debug)]
+pub struct TransientDispatch;
+
+impl crate::DynTransientDispatch for TransientDispatch {}
 
 impl TextureView {
     /// # Safety

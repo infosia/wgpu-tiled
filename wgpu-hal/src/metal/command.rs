@@ -1050,6 +1050,12 @@ impl crate::CommandEncoder for super::CommandEncoder {
     unsafe fn end_render_pass(&mut self) {
         self.state.render.take().unwrap().endEncoding();
     }
+    unsafe fn next_subpass(&mut self) {
+        unreachable!()
+    }
+    unsafe fn dispatch_transient(&mut self, _dispatch: &super::TransientDispatch) {
+        unreachable!()
+    }
 
     unsafe fn set_bind_group(
         &mut self,

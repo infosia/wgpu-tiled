@@ -533,9 +533,7 @@ fn clear_texture_via_render_passes(
                         sample_count: dst_texture.desc.sample_count,
                         color_attachments,
                         depth_stencil_attachment,
-                        multiview_mask: None,
-                        timestamp_writes: None,
-                        occlusion_query_set: None,
+                        ..Default::default()
                     })
                     .map_err(|e| dst_texture.device.handle_hal_error(e))?;
                 encoder.end_render_pass();

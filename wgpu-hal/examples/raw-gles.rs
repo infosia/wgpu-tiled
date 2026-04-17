@@ -382,9 +382,7 @@ fn fill_screen(exposed: &hal::ExposedAdapter<hal::api::Gles>, width: u32, height
             clear_value: wgpu_types::Color::BLUE,
         })],
         depth_stencil_attachment: None,
-        multiview_mask: None,
-        timestamp_writes: None,
-        occlusion_query_set: None,
+        ..Default::default()
     };
     unsafe {
         encoder.begin_encoding(None).unwrap();

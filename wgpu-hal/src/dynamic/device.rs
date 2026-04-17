@@ -14,7 +14,7 @@ use super::{
     DynAccelerationStructure, DynBindGroup, DynBindGroupLayout, DynBuffer, DynCommandEncoder,
     DynComputePipeline, DynFence, DynPipelineCache, DynPipelineLayout, DynQuerySet, DynQueue,
     DynRenderPipeline, DynResource, DynResourceExt as _, DynSampler, DynShaderModule, DynTexture,
-    DynTextureView,
+    DynTextureView, DynTransientAttachment, DynTransientDispatch,
 };
 
 pub trait DynDevice: DynResource {
@@ -55,6 +55,16 @@ pub trait DynDevice: DynResource {
         desc: &SamplerDescriptor,
     ) -> Result<Box<dyn DynSampler>, DeviceError>;
     unsafe fn destroy_sampler(&self, sampler: Box<dyn DynSampler>);
+    unsafe fn create_transient_attachment(
+        &self,
+        desc: &wgt::TransientAttachmentDescriptor,
+    ) -> Result<Box<dyn DynTransientAttachment>, DeviceError>;
+    unsafe fn destroy_transient_attachment(&self, resource: Box<dyn DynTransientAttachment>);
+    unsafe fn create_transient_dispatch(
+        &self,
+        desc: &wgt::TransientDispatchDescriptor,
+    ) -> Result<Box<dyn DynTransientDispatch>, DeviceError>;
+    unsafe fn destroy_transient_dispatch(&self, resource: Box<dyn DynTransientDispatch>);
 
     unsafe fn create_command_encoder(
         &self,
@@ -257,6 +267,30 @@ impl<D: Device + DynResource> DynDevice for D {
 
     unsafe fn destroy_sampler(&self, sampler: Box<dyn DynSampler>) {
         unsafe { D::destroy_sampler(self, sampler.unbox()) };
+    }
+
+    unsafe fn create_transient_attachment(
+        &self,
+        desc: &wgt::TransientAttachmentDescriptor,
+    ) -> Result<Box<dyn DynTransientAttachment>, DeviceError> {
+        unsafe { D::create_transient_attachment(self, desc) }
+            .map(|b| -> Box<dyn DynTransientAttachment> { Box::new(b) })
+    }
+
+    unsafe fn destroy_transient_attachment(&self, resource: Box<dyn DynTransientAttachment>) {
+        unsafe { D::destroy_transient_attachment(self, resource.unbox()) };
+    }
+
+    unsafe fn create_transient_dispatch(
+        &self,
+        desc: &wgt::TransientDispatchDescriptor,
+    ) -> Result<Box<dyn DynTransientDispatch>, DeviceError> {
+        unsafe { D::create_transient_dispatch(self, desc) }
+            .map(|b| -> Box<dyn DynTransientDispatch> { Box::new(b) })
+    }
+
+    unsafe fn destroy_transient_dispatch(&self, resource: Box<dyn DynTransientDispatch>) {
+        unsafe { D::destroy_transient_dispatch(self, resource.unbox()) };
     }
 
     unsafe fn create_command_encoder(

@@ -924,6 +924,12 @@ impl crate::CommandEncoder for super::CommandEncoder {
             self.rpass_debug_marker_active = false;
         }
     }
+    unsafe fn next_subpass(&mut self) {
+        unreachable!()
+    }
+    unsafe fn dispatch_transient(&mut self, _dispatch: &super::TransientDispatch) {
+        unreachable!()
+    }
 
     unsafe fn set_bind_group(
         &mut self,

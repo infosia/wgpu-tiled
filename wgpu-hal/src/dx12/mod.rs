@@ -468,6 +468,8 @@ impl crate::Api for Api {
     type Texture = Texture;
     type SurfaceTexture = Texture;
     type TextureView = TextureView;
+    type TransientAttachment = TransientAttachment;
+    type TransientDispatch = TransientDispatch;
     type Sampler = Sampler;
     type QuerySet = QuerySet;
     type Fence = Fence;
@@ -504,7 +506,9 @@ crate::impl_dyn_resource!(
     ShaderModule,
     Surface,
     Texture,
-    TextureView
+    TextureView,
+    TransientAttachment,
+    TransientDispatch
 );
 
 // Limited by D3D12's root signature size of 64. Each element takes 1 or 2 entries.
@@ -1046,6 +1050,16 @@ pub struct TextureView {
 }
 
 impl crate::DynTextureView for TextureView {}
+
+#[derive(Debug)]
+pub struct TransientAttachment;
+
+impl crate::DynTransientAttachment for TransientAttachment {}
+
+#[derive(Debug)]
+pub struct TransientDispatch;
+
+impl crate::DynTransientDispatch for TransientDispatch {}
 
 unsafe impl Send for TextureView {}
 unsafe impl Sync for TextureView {}

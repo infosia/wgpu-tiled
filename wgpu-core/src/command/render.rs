@@ -1480,6 +1480,7 @@ impl RenderPassInfo {
             multiview_mask,
             timestamp_writes: timestamp_writes_hal,
             occlusion_query_set: occlusion_query_set_hal,
+            ..Default::default()
         };
         unsafe {
             encoder
@@ -1580,8 +1581,7 @@ impl RenderPassInfo {
                     clear_value: (0.0, 0),
                 }),
                 multiview_mask: self.multiview_mask,
-                timestamp_writes: None,
-                occlusion_query_set: None,
+                ..Default::default()
             };
             unsafe {
                 raw.begin_render_pass(&desc)
