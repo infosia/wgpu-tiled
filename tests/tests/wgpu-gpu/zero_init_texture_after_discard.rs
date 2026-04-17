@@ -174,6 +174,7 @@ impl<'ctx> TestCase<'ctx> {
                 timestamp_writes: None,
                 occlusion_query_set: None,
                 multiview_mask: None,
+                ..Default::default()
             });
             ctx.queue.submit([encoder.finish()]);
         } else {
@@ -261,6 +262,7 @@ impl<'ctx> TestCase<'ctx> {
                 timestamp_writes: None,
                 occlusion_query_set: None,
                 multiview_mask: None,
+                ..Default::default()
             });
     }
 
@@ -287,6 +289,7 @@ impl<'ctx> TestCase<'ctx> {
                 timestamp_writes: None,
                 occlusion_query_set: None,
                 multiview_mask: None,
+                ..Default::default()
             });
     }
 
@@ -313,6 +316,7 @@ impl<'ctx> TestCase<'ctx> {
                 timestamp_writes: None,
                 occlusion_query_set: None,
                 multiview_mask: None,
+                ..Default::default()
             });
     }
 

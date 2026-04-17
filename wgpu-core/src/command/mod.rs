@@ -61,7 +61,7 @@ pub use self::{
         ColorAttachmentError, ColorAttachments, LoadOp, PassChannel, RenderBasePass, RenderPass,
         RenderPassColorAttachment, RenderPassDepthStencilAttachment, RenderPassDescriptor,
         RenderPassError, RenderPassErrorInner, ResolvedPassChannel,
-        ResolvedRenderPassDepthStencilAttachment, StoreOp,
+        ResolvedRenderPassDepthStencilAttachment, StoreOp, SubpassDescriptor,
     },
     render_command::ArcRenderCommand,
     transfer::{CopySide, TransferError},
@@ -2047,6 +2047,8 @@ pub enum PassErrorScope {
     BeginPipelineStatisticsQuery,
     #[error("In a end_pipeline_statistics_query command")]
     EndPipelineStatisticsQuery,
+    #[error("In a next_subpass command")]
+    NextSubpass,
     #[error("In a execute_bundle command")]
     ExecuteBundle,
     #[error("In a dispatch command, indirect:{indirect}")]

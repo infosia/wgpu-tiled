@@ -284,6 +284,8 @@ struct ArcRenderPassDescriptor<'a> {
     /// Number of subpasses defined for this render pass.
     /// TODO(Phase 12): replace this scalar with per-subpass `RenderPassContext` entries.
     pub subpass_count: u32,
+    /// Optional set of active subpasses; `None` means all subpasses active.
+    pub active_subpass_mask: Option<ActiveSubpassMask>,
     /// The multiview array layers that will be used
     pub multiview_mask: Option<NonZeroU32>,
 }
@@ -294,6 +296,13 @@ fn subpass_is_active(mask: Option<ActiveSubpassMask>, subpass_count: u32, index:
     }
     mask.unwrap_or(ActiveSubpassMask::ALL)
         .is_active(SubpassIndex(index))
+}
+
+fn first_active_subpass_index(
+    subpass_count: u32,
+    active_subpass_mask: Option<ActiveSubpassMask>,
+) -> Option<u32> {
+    (0..subpass_count).find(|&index| subpass_is_active(active_subpass_mask, subpass_count, index))
 }
 
 fn validate_subpasses(
@@ -395,6 +404,33 @@ fn validate_bundle_execution_support(subpass_count: u32) -> Result<(), RenderPas
     Ok(())
 }
 
+fn advance_subpass_index(
+    current_subpass_index: Option<u32>,
+    subpass_count: u32,
+    active_subpass_mask: Option<ActiveSubpassMask>,
+) -> Result<Option<u32>, RenderPassErrorInner> {
+    if subpass_count == 0 {
+        return Err(RenderPassErrorInner::NextSubpassInLegacyPass);
+    }
+    let next_subpass = current_subpass_index
+        .and_then(|index| index.checked_add(1))
+        .unwrap_or(1);
+    if next_subpass > subpass_count {
+        return Err(RenderPassErrorInner::NextSubpassPastLast {
+            next_subpass,
+            subpass_count,
+        });
+    }
+    if next_subpass == subpass_count {
+        return Ok(Some(subpass_count));
+    }
+
+    let next_active_subpass = (next_subpass..subpass_count)
+        .find(|&index| subpass_is_active(active_subpass_mask, subpass_count, index))
+        .unwrap_or(subpass_count);
+    Ok(Some(next_active_subpass))
+}
+
 pub type RenderBasePass = BasePass<ArcRenderCommand, RenderPassError>;
 
 /// A pass's [encoder state](https://www.w3.org/TR/webgpu/#encoder-state) and
@@ -422,6 +458,8 @@ pub struct RenderPass {
     occlusion_query_set: Option<Arc<QuerySet>>,
     /// TODO(Phase 12): track per-subpass `RenderPassContext` values for pipeline compatibility.
     subpass_count: u32,
+    active_subpass_mask: Option<ActiveSubpassMask>,
+    current_subpass_index: Option<u32>,
     multiview_mask: Option<NonZeroU32>,
 
     // Resource binding dedupe state.
@@ -439,6 +477,7 @@ impl RenderPass {
             depth_stencil_attachment,
             occlusion_query_set,
             subpass_count,
+            active_subpass_mask,
             multiview_mask,
         } = desc;
 
@@ -450,6 +489,8 @@ impl RenderPass {
             timestamp_writes,
             occlusion_query_set,
             subpass_count,
+            active_subpass_mask,
+            current_subpass_index: first_active_subpass_index(subpass_count, active_subpass_mask),
             multiview_mask,
 
             current_bind_groups: BindGroupStateChange::new(),
@@ -466,6 +507,8 @@ impl RenderPass {
             timestamp_writes: None,
             occlusion_query_set: None,
             subpass_count: 0,
+            active_subpass_mask: None,
+            current_subpass_index: None,
             multiview_mask: None,
             current_bind_groups: BindGroupStateChange::new(),
             current_pipeline: StateChange::new(),
@@ -475,6 +518,10 @@ impl RenderPass {
     #[inline]
     pub fn label(&self) -> Option<&str> {
         self.base.label.as_deref()
+    }
+
+    pub fn current_subpass_index(&self) -> Option<u32> {
+        self.current_subpass_index
     }
 }
 
@@ -956,7 +1003,8 @@ pub enum RenderPassErrorInner {
     NoActiveSubpasses { count: u32 },
     #[error("active subpass {active} reads from culled subpass {culled}")]
     ActiveSubpassReadsFromCulled { active: u32, culled: u32 },
-    // TODO(Phase 7): start emitting this from `RenderPassInterface::next_subpass`.
+    #[error("next_subpass can only be called when subpasses are defined")]
+    NextSubpassInLegacyPass,
     #[error("next_subpass advanced to {next_subpass}, but render pass has only {subpass_count} subpasses")]
     NextSubpassPastLast {
         next_subpass: u32,
@@ -1074,6 +1122,7 @@ impl WebGpuError for RenderPassError {
             | RenderPassErrorInner::InputAttachmentReferencesLaterSubpass { .. }
             | RenderPassErrorInner::NoActiveSubpasses { .. }
             | RenderPassErrorInner::ActiveSubpassReadsFromCulled { .. }
+            | RenderPassErrorInner::NextSubpassInLegacyPass
             | RenderPassErrorInner::NextSubpassPastLast { .. }
             | RenderPassErrorInner::TransientSizeUnresolvable
             | RenderPassErrorInner::RenderBundleInSubpassPass
@@ -1813,6 +1862,7 @@ impl Global {
                     || desc.depth_stencil_attachment.is_some(),
             )?;
             arc_desc.subpass_count = desc.subpasses.len() as u32;
+            arc_desc.active_subpass_mask = desc.active_subpass_mask;
 
             for color_attachment in desc.color_attachments.iter() {
                 if let Some(RenderPassColorAttachment {
@@ -1950,6 +2000,7 @@ impl Global {
                     depth_stencil_attachment: None,
                     occlusion_query_set: None,
                     subpass_count: 0,
+                    active_subpass_mask: None,
                     multiview_mask: None,
                 };
                 match fill_arc_desc(hub, desc, &mut arc_desc, &cmd_enc.device) {
@@ -2409,6 +2460,9 @@ pub(super) fn encode_render_pass(
                     )
                     .map_pass_err(scope)?;
                 }
+                ArcRenderCommand::NextSubpass => unsafe {
+                    state.pass.base.raw_encoder.next_subpass();
+                },
                 ArcRenderCommand::ExecuteBundle(bundle) => {
                     let scope = PassErrorScope::ExecuteBundle;
                     execute_bundle(
@@ -3991,6 +4045,30 @@ impl Global {
         Ok(())
     }
 
+    pub fn render_pass_next_subpass(&self, pass: &mut RenderPass) -> Result<(), PassStateError> {
+        let scope = PassErrorScope::NextSubpass;
+        let base = pass_base!(pass, scope);
+        match advance_subpass_index(
+            pass.current_subpass_index,
+            pass.subpass_count,
+            pass.active_subpass_mask,
+        ) {
+            Ok(next_subpass) => {
+                pass.current_subpass_index = next_subpass;
+                base.commands.push(ArcRenderCommand::NextSubpass);
+                Ok(())
+            }
+            Err(err) => {
+                base.error.get_or_insert(err.map_pass_err(scope));
+                Ok(())
+            }
+        }
+    }
+
+    pub fn render_pass_current_subpass_index(&self, pass: &RenderPass) -> Option<u32> {
+        pass.current_subpass_index()
+    }
+
     pub fn render_pass_execute_bundles(
         &self,
         pass: &mut RenderPass,
@@ -4031,9 +4109,9 @@ mod tests {
     use alloc::{borrow::Cow, vec};
 
     use super::{
-        validate_bundle_execution_support, validate_subpass_feature, validate_subpasses,
-        validate_transient_attachment_sizes, RenderPassError, RenderPassErrorInner,
-        SubpassDescriptor,
+        advance_subpass_index, validate_bundle_execution_support, validate_subpass_feature,
+        validate_subpasses, validate_transient_attachment_sizes, RenderPassError,
+        RenderPassErrorInner, SubpassDescriptor,
     };
     use crate::command::PassErrorScope;
     use wgt::{
@@ -4163,5 +4241,47 @@ mod tests {
             },
         };
         assert_eq!(err.webgpu_error_type(), ErrorType::Validation);
+    }
+
+    #[test]
+    fn advance_subpass_index_rejects_legacy_single_pass_mode() {
+        let error = advance_subpass_index(None, 0, None).unwrap_err();
+        assert!(matches!(
+            error,
+            RenderPassErrorInner::NextSubpassInLegacyPass
+        ));
+    }
+
+    #[test]
+    fn advance_subpass_index_advances_within_bounds() {
+        let next = advance_subpass_index(Some(0), 2, None).unwrap();
+        assert_eq!(next, Some(1));
+    }
+
+    #[test]
+    fn advance_subpass_index_allows_terminal_subpass_boundary() {
+        let next = advance_subpass_index(Some(1), 2, None).unwrap();
+        assert_eq!(next, Some(2));
+    }
+
+    #[test]
+    fn advance_subpass_index_rejects_beyond_terminal_boundary() {
+        let error = advance_subpass_index(Some(2), 2, None).unwrap_err();
+        assert!(matches!(
+            error,
+            RenderPassErrorInner::NextSubpassPastLast {
+                next_subpass: 3,
+                subpass_count: 2
+            }
+        ));
+    }
+
+    #[test]
+    fn advance_subpass_index_skips_culled_subpasses() {
+        let active_mask = ActiveSubpassMask::NONE
+            .with(SubpassIndex(0))
+            .with(SubpassIndex(2));
+        let next = advance_subpass_index(Some(0), 4, Some(active_mask)).unwrap();
+        assert_eq!(next, Some(2));
     }
 }

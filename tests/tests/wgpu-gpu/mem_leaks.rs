@@ -208,6 +208,7 @@ async fn draw_test_with_reports(
         timestamp_writes: None,
         occlusion_query_set: None,
         multiview_mask: None,
+        ..Default::default()
     });
 
     rpass.set_pipeline(&pipeline);

@@ -367,6 +367,7 @@ async fn vertex_index_common(ctx: TestingContext) {
             timestamp_writes: None,
             occlusion_query_set: None,
             multiview_mask: None,
+            ..Default::default()
         });
 
         {

@@ -183,6 +183,7 @@ impl MultiTargetRenderer {
             timestamp_writes: None,
             occlusion_query_set: None,
             multiview_mask: None,
+            ..Default::default()
         });
         rpass.set_pipeline(&self.pipeline);
         rpass.set_bind_group(0, &self.bindgroup, &[]);
@@ -341,6 +342,7 @@ impl TargetRenderer {
             timestamp_writes: None,
             occlusion_query_set: None,
             multiview_mask: None,
+            ..Default::default()
         });
         rpass.set_pipeline(&self.pipeline);
         rpass.set_bind_group(0, &self.bindgroup_left, &[]);

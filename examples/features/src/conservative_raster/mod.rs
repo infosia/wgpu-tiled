@@ -274,6 +274,7 @@ impl crate::framework::Example for Example {
                 timestamp_writes: None,
                 occlusion_query_set: None,
                 multiview_mask: None,
+                ..Default::default()
             });
 
             rpass.set_pipeline(&self.pipeline_triangle_conservative);
@@ -297,6 +298,7 @@ impl crate::framework::Example for Example {
                 timestamp_writes: None,
                 occlusion_query_set: None,
                 multiview_mask: None,
+                ..Default::default()
             });
 
             rpass.set_pipeline(&self.pipeline_upscale);

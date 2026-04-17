@@ -120,6 +120,7 @@ static RESOLVE_WITH_TRANSIENT: GpuTestConfiguration = GpuTestConfiguration::new(
                 timestamp_writes: None,
                 occlusion_query_set: None,
                 multiview_mask: None,
+                ..Default::default()
             });
 
             rpass.set_pipeline(&pipeline);

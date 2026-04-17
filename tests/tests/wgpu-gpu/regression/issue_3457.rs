@@ -157,6 +157,7 @@ static PASS_RESET_VERTEX_BUFFER: GpuTestConfiguration = GpuTestConfiguration::ne
             timestamp_writes: None,
             occlusion_query_set: None,
             multiview_mask: None,
+            ..Default::default()
         });
 
         double_rpass.set_pipeline(&double_pipeline);
@@ -194,6 +195,7 @@ static PASS_RESET_VERTEX_BUFFER: GpuTestConfiguration = GpuTestConfiguration::ne
             timestamp_writes: None,
             occlusion_query_set: None,
             multiview_mask: None,
+            ..Default::default()
         });
 
         single_rpass.set_pipeline(&single_pipeline);

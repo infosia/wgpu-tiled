@@ -3671,6 +3671,14 @@ impl dispatch::RenderPassInterface for WebRenderPassEncoder {
         // Removed from WebGPU https://github.com/gpuweb/gpuweb/pull/2296
     }
 
+    fn next_subpass(&mut self) {
+        // WebGPU has no public subpass API yet.
+    }
+
+    fn current_subpass_index(&self) -> Option<u32> {
+        None
+    }
+
     fn execute_bundles(
         &mut self,
         render_bundles: &mut dyn Iterator<Item = &dispatch::DispatchRenderBundle>,

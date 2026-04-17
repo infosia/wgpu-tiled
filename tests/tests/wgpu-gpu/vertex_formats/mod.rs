@@ -361,6 +361,7 @@ async fn vertex_formats_common(ctx: TestingContext, tests: &[Test<'_>]) {
             timestamp_writes: None,
             occlusion_query_set: None,
             multiview_mask: None,
+            ..Default::default()
         });
 
         rpass.set_vertex_buffer(0, buffer_input.slice(..));

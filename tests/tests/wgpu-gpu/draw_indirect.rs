@@ -273,6 +273,7 @@ async fn run_test(ctx: TestingContext, test_data: TestData, expect_noop: bool) {
             timestamp_writes: None,
             occlusion_query_set: None,
             multiview_mask: None,
+            ..Default::default()
         });
 
         rpass.set_pipeline(&pipeline);
@@ -749,6 +750,7 @@ async fn indirect_buffer_offsets(ctx: TestingContext) {
             timestamp_writes: None,
             occlusion_query_set: None,
             multiview_mask: None,
+            ..Default::default()
         });
 
         rpass.set_pipeline(&pipeline);

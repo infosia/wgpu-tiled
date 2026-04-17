@@ -1218,6 +1218,7 @@ impl Player {
                 query_index,
             },
             C::EndPipelineStatisticsQuery => C::EndPipelineStatisticsQuery,
+            C::NextSubpass => C::NextSubpass,
             C::ExecuteBundle(bundle) => C::ExecuteBundle(self.resolve_render_bundle_id(bundle)),
         }
     }

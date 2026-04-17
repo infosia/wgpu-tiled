@@ -123,6 +123,7 @@ pub enum RenderCommand<R: ReferenceType> {
         query_index: u32,
     },
     EndPipelineStatisticsQuery,
+    NextSubpass,
     ExecuteBundle(R::RenderBundle),
 }
 

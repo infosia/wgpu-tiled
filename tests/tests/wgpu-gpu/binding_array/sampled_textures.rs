@@ -243,6 +243,7 @@ async fn binding_array_sampled_textures(ctx: TestingContext, partially_bound: bo
             timestamp_writes: None,
             occlusion_query_set: None,
             multiview_mask: None,
+            ..Default::default()
         });
         render_pass.set_pipeline(&pipeline);
         render_pass.set_bind_group(0, &bind_group, &[]);

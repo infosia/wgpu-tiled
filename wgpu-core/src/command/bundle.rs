@@ -453,7 +453,10 @@ impl RenderBundleEncoder {
                 | &RenderCommand::SetBlendConstant(_)
                 | &RenderCommand::SetStencilReference(_)
                 | &RenderCommand::SetViewport { .. }
-                | &RenderCommand::SetScissor(_) => unreachable!("not supported by a render bundle"),
+                | &RenderCommand::SetScissor(_)
+                | &RenderCommand::NextSubpass => {
+                    unreachable!("not supported by a render bundle")
+                }
             }
         }
 
@@ -1144,7 +1147,8 @@ impl RenderBundle {
                 | Cmd::SetBlendConstant(_)
                 | Cmd::SetStencilReference(_)
                 | Cmd::SetViewport { .. }
-                | Cmd::SetScissor(_) => unreachable!(),
+                | Cmd::SetScissor(_)
+                | Cmd::NextSubpass => unreachable!(),
             }
         }
 

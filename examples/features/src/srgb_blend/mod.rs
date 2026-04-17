@@ -196,6 +196,7 @@ impl<const SRGB: bool> crate::framework::Example for Example<SRGB> {
                 timestamp_writes: None,
                 occlusion_query_set: None,
                 multiview_mask: None,
+                ..Default::default()
             });
             rpass.push_debug_group("Prepare data for draw.");
             rpass.set_pipeline(&self.pipeline);

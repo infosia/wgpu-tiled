@@ -686,6 +686,7 @@ var tex: texture_external;
         timestamp_writes: None,
         occlusion_query_set: None,
         multiview_mask: None,
+        ..Default::default()
     });
 
     pass.set_pipeline(&pipeline);

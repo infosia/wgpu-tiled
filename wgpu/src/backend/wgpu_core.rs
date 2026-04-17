@@ -2611,6 +2611,16 @@ impl dispatch::CommandEncoderInterface for CoreCommandEncoder {
                     beginning_of_pass_write_index: tw.beginning_of_pass_write_index,
                     end_of_pass_write_index: tw.end_of_pass_write_index,
                 });
+        let subpasses = (!desc.subpasses.is_empty()).then(|| {
+            desc.subpasses
+                .iter()
+                .map(|subpass| wgc::command::SubpassDescriptor {
+                    color_attachment_indices: Borrowed(subpass.color_attachment_indices),
+                    uses_depth_stencil: subpass.uses_depth_stencil,
+                    input_attachments: Borrowed(subpass.input_attachments),
+                })
+                .collect::<Vec<_>>()
+        });
 
         let (pass, err) = self.context.0.command_encoder_begin_render_pass(
             self.id,
@@ -2620,11 +2630,11 @@ impl dispatch::CommandEncoderInterface for CoreCommandEncoder {
                 color_attachments: Borrowed(&colors),
                 depth_stencil_attachment: depth_stencil.as_ref(),
                 occlusion_query_set: desc.occlusion_query_set.map(|qs| qs.inner.as_core().id),
-                subpasses: Borrowed(&[]),
-                subpass_dependencies: Borrowed(&[]),
+                subpasses: Borrowed(subpasses.as_deref().unwrap_or(&[])),
+                subpass_dependencies: Borrowed(desc.subpass_dependencies),
                 transient_attachments: Borrowed(&[]),
-                transient_memory_hint: wgt::TransientMemoryHint::default(),
-                active_subpass_mask: None,
+                transient_memory_hint: desc.transient_memory_hint,
+                active_subpass_mask: desc.active_subpass_mask,
                 multiview_mask: desc.multiview_mask,
             },
         );
@@ -3713,6 +3723,21 @@ impl dispatch::RenderPassInterface for CoreRenderPass {
                 "RenderPass::execute_bundles",
             );
         }
+    }
+
+    fn next_subpass(&mut self) {
+        if let Err(cause) = self.context.0.render_pass_next_subpass(&mut self.pass) {
+            self.context.handle_error(
+                &self.error_sink,
+                cause,
+                self.pass.label(),
+                "RenderPass::next_subpass",
+            );
+        }
+    }
+
+    fn current_subpass_index(&self) -> Option<u32> {
+        self.context.0.render_pass_current_subpass_index(&self.pass)
     }
 }
 

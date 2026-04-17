@@ -411,6 +411,7 @@ fn render_pass(
         }),
         occlusion_query_set: None,
         multiview_mask: None,
+        ..Default::default()
     });
     *next_unused_query += 2;
 

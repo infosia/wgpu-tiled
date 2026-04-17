@@ -620,6 +620,7 @@ impl IntoTrace for ArcRenderCommand {
                 query_index,
             },
             C::EndPipelineStatisticsQuery => C::EndPipelineStatisticsQuery,
+            C::NextSubpass => C::NextSubpass,
             C::ExecuteBundle(bundle) => C::ExecuteBundle(bundle.into_trace()),
         }
     }

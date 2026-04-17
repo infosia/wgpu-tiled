@@ -244,6 +244,7 @@ impl ApplicationHandler for App {
                             timestamp_writes: None,
                             occlusion_query_set: None,
                             multiview_mask: None,
+                            ..Default::default()
                         });
                     }
 

@@ -516,6 +516,9 @@ pub trait RenderPassInterface: CommonTraits + Drop {
     fn begin_pipeline_statistics_query(&mut self, query_set: &DispatchQuerySet, query_index: u32);
     fn end_pipeline_statistics_query(&mut self);
 
+    fn next_subpass(&mut self);
+    fn current_subpass_index(&self) -> Option<u32>;
+
     fn execute_bundles(&mut self, render_bundles: &mut dyn Iterator<Item = &DispatchRenderBundle>);
 }
 

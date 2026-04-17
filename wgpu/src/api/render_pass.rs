@@ -325,6 +325,20 @@ impl RenderPass<'_> {
         self.inner.execute_bundles(&mut render_bundles);
     }
 
+    /// Advances recording to the next subpass in multi-subpass mode.
+    ///
+    /// Calling this in legacy single-pass mode is a validation error.
+    pub fn next_subpass(&mut self) {
+        self.inner.next_subpass();
+    }
+
+    /// Returns the currently active subpass index.
+    ///
+    /// Returns `None` when recording in legacy single-pass mode.
+    pub fn current_subpass_index(&self) -> Option<u32> {
+        self.inner.current_subpass_index()
+    }
+
     /// Dispatches multiple draw calls from the active vertex buffer(s) based on the contents of the `indirect_buffer`.
     /// `count` draw calls are issued.
     ///
@@ -633,6 +647,19 @@ pub struct RenderPassDepthStencilAttachment<'tex> {
 #[cfg(send_sync)]
 static_assertions::assert_impl_all!(RenderPassDepthStencilAttachment<'_>: Send, Sync);
 
+/// Describes one subpass within a render pass.
+#[derive(Clone, Debug, Default)]
+pub struct SubpassDescriptor<'a> {
+    /// Indices into [`RenderPassDescriptor::color_attachments`] for color writes in this subpass.
+    pub color_attachment_indices: &'a [u32],
+    /// Whether this subpass uses the pass depth/stencil attachment.
+    pub uses_depth_stencil: bool,
+    /// Input attachment bindings sourced from earlier subpasses.
+    pub input_attachments: &'a [wgt::SubpassInputAttachment],
+}
+#[cfg(send_sync)]
+static_assertions::assert_impl_all!(SubpassDescriptor<'_>: Send, Sync);
+
 /// Describes the attachments of a render pass.
 ///
 /// For use with [`CommandEncoder::begin_render_pass`].
@@ -653,6 +680,17 @@ pub struct RenderPassDescriptor<'a> {
     pub timestamp_writes: Option<RenderPassTimestampWrites<'a>>,
     /// Defines where the occlusion query results will be stored for this pass.
     pub occlusion_query_set: Option<&'a QuerySet>,
+    /// Optional subpass definitions. Empty means legacy single-pass behavior.
+    pub subpasses: &'a [SubpassDescriptor<'a>],
+    /// Optional dependencies between subpasses.
+    pub subpass_dependencies: &'a [wgt::SubpassDependency],
+    /// Hint for transient-memory allocation policy.
+    ///
+    /// Direct render-pass descriptors cannot reference transient attachments yet; use the
+    /// upcoming RenderGraphBuilder path for transient attachment declarations.
+    pub transient_memory_hint: wgt::TransientMemoryHint,
+    /// Optional active subpass mask. `None` means all subpasses are active.
+    pub active_subpass_mask: Option<wgt::ActiveSubpassMask>,
     /// The mask of multiview image layers to use for this render pass. For example, if you wish
     /// to render to the first 2 layers, you would use 3=0b11. If you wanted ro render to only the
     /// 2nd layer, you would use 2=0b10. If you aren't using multiview this should be `None`.

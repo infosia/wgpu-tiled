@@ -96,6 +96,7 @@ async fn run(_path: Option<String>) {
             occlusion_query_set: None,
             timestamp_writes: None,
             multiview_mask: None,
+            ..Default::default()
         });
         render_pass.set_pipeline(&pipeline);
         render_pass.draw(0..3, 0..1);
