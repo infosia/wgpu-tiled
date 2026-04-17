@@ -1140,11 +1140,98 @@ impl crate::Device for super::Device {
     }
     unsafe fn create_transient_attachment(
         &self,
-        _desc: &wgt::TransientAttachmentDescriptor,
+        desc: &wgt::TransientAttachmentDescriptor,
     ) -> Result<super::TransientAttachment, crate::DeviceError> {
-        Err(crate::DeviceError::Unexpected)
+        if !self
+            .shared
+            .features
+            .contains(wgt::Features::TRANSIENT_ATTACHMENTS)
+        {
+            log::error!(
+                "gles: create_transient_attachment called without TRANSIENT_ATTACHMENTS support"
+            );
+            return Err(crate::DeviceError::Unexpected);
+        }
+
+        let (width, height) = match desc.size {
+            wgt::TransientSize::Explicit { width, height } => (width, height),
+            wgt::TransientSize::MatchTarget => {
+                log::error!(
+                    "gles: create_transient_attachment received unresolved TransientSize::MatchTarget"
+                );
+                return Err(crate::DeviceError::Unexpected);
+            }
+        };
+        if width == 0 || height == 0 || desc.sample_count == 0 {
+            log::error!(
+                "gles: create_transient_attachment received invalid descriptor: width={}, height={}, sample_count={}",
+                width,
+                height,
+                desc.sample_count
+            );
+            return Err(crate::DeviceError::Unexpected);
+        }
+
+        let gl = &self.shared.context.lock();
+        let format_desc = self.shared.describe_texture_format(desc.format);
+        let raw =
+            unsafe { gl.create_renderbuffer() }.map_err(|_| crate::DeviceError::OutOfMemory)?;
+        unsafe { gl.bind_renderbuffer(glow::RENDERBUFFER, Some(raw)) };
+        if desc.sample_count > 1 {
+            unsafe {
+                gl.renderbuffer_storage_multisample(
+                    glow::RENDERBUFFER,
+                    desc.sample_count as i32,
+                    format_desc.internal,
+                    width as i32,
+                    height as i32,
+                )
+            };
+        } else {
+            unsafe {
+                gl.renderbuffer_storage(
+                    glow::RENDERBUFFER,
+                    format_desc.internal,
+                    width as i32,
+                    height as i32,
+                )
+            };
+        }
+        let storage_error = unsafe { gl.get_error() };
+        if storage_error != glow::NO_ERROR {
+            unsafe { gl.bind_renderbuffer(glow::RENDERBUFFER, None) };
+            unsafe { gl.delete_renderbuffer(raw) };
+            if storage_error == glow::OUT_OF_MEMORY {
+                return Err(crate::DeviceError::OutOfMemory);
+            }
+            log::error!(
+                "gles: create_transient_attachment failed during renderbuffer storage (gl error {storage_error:#x})"
+            );
+            return Err(crate::DeviceError::Unexpected);
+        }
+        #[cfg(native)]
+        if self
+            .shared
+            .private_caps
+            .contains(PrivateCapabilities::DEBUG_FNS)
+        {
+            let name = raw.0.get();
+            unsafe { gl.object_label(glow::RENDERBUFFER, name, Some("wgpu transient attachment")) };
+        }
+        unsafe { gl.bind_renderbuffer(glow::RENDERBUFFER, None) };
+
+        Ok(super::TransientAttachment {
+            raw,
+            format: desc.format,
+            width,
+            height,
+            sample_count: desc.sample_count,
+        })
     }
-    unsafe fn destroy_transient_attachment(&self, _resource: super::TransientAttachment) {}
+    unsafe fn destroy_transient_attachment(&self, resource: super::TransientAttachment) {
+        let gl = &self.shared.context.lock();
+        unsafe { gl.delete_renderbuffer(resource.raw) };
+    }
     unsafe fn create_transient_dispatch(
         &self,
         _desc: &wgt::TransientDispatchDescriptor,

@@ -5,6 +5,30 @@ use arrayvec::ArrayVec;
 
 use super::{conv, Command as C};
 
+fn first_active_subpass_index(
+    subpass_count: u32,
+    mask: Option<wgt::ActiveSubpassMask>,
+) -> Option<u32> {
+    if subpass_count == 0 {
+        return None;
+    }
+    let mask_bits = mask.unwrap_or(wgt::ActiveSubpassMask::ALL).0;
+    let search_end = subpass_count.min(wgt::ActiveSubpassMask::MAX_SUBPASSES);
+    (0..search_end).find(|&index| (mask_bits & (1u32 << index)) != 0)
+}
+
+fn next_active_subpass_index(
+    current: u32,
+    subpass_count: u32,
+    mask: Option<wgt::ActiveSubpassMask>,
+) -> u32 {
+    let mask_bits = mask.unwrap_or(wgt::ActiveSubpassMask::ALL).0;
+    let search_end = subpass_count.min(wgt::ActiveSubpassMask::MAX_SUBPASSES);
+    ((current + 1)..search_end)
+        .find(|&index| (mask_bits & (1u32 << index)) != 0)
+        .unwrap_or(subpass_count)
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 struct TextureSlotDesc {
     tex_target: super::BindTarget,
@@ -38,6 +62,9 @@ pub(super) struct State {
     current_immediates_data: [u32; super::MAX_IMMEDIATES],
     end_of_pass_timestamp: Option<glow::Query>,
     clip_distance_count: u32,
+    active_subpass_index: Option<u32>,
+    subpass_count: u32,
+    active_subpass_mask: Option<wgt::ActiveSubpassMask>,
 }
 
 impl Default for State {
@@ -67,6 +94,9 @@ impl Default for State {
             current_immediates_data: [0; super::MAX_IMMEDIATES],
             end_of_pass_timestamp: Default::default(),
             clip_distance_count: Default::default(),
+            active_subpass_index: Default::default(),
+            subpass_count: Default::default(),
+            active_subpass_mask: Default::default(),
         }
     }
 }
@@ -507,6 +537,15 @@ impl crate::CommandEncoder for super::CommandEncoder {
                 .map(|index| t.query_set.queries[index as usize]);
         }
 
+        self.state.subpass_count = desc.subpasses.len() as u32;
+        self.state.active_subpass_mask = if self.state.subpass_count > 0 {
+            desc.active_subpass_mask
+        } else {
+            None
+        };
+        self.state.active_subpass_index =
+            first_active_subpass_index(self.state.subpass_count, self.state.active_subpass_mask);
+
         self.state.render_size = desc.extent;
         self.state.resolve_attachments.clear();
         self.state.invalidate_attachments.clear();
@@ -715,6 +754,9 @@ impl crate::CommandEncoder for super::CommandEncoder {
         self.state.instance_vbuf_mask = 0;
         self.state.dirty_vbuf_mask = 0;
         self.state.active_first_instance = 0;
+        self.state.active_subpass_index = None;
+        self.state.subpass_count = 0;
+        self.state.active_subpass_mask = None;
         self.state.color_targets.clear();
         for vat in &self.state.vertex_attributes {
             self.cmd_buffer
@@ -729,7 +771,20 @@ impl crate::CommandEncoder for super::CommandEncoder {
         }
     }
     unsafe fn next_subpass(&mut self) {
-        unreachable!()
+        if self.state.subpass_count == 0 {
+            return;
+        }
+        let Some(current_subpass) = self.state.active_subpass_index else {
+            return;
+        };
+        let next_subpass = next_active_subpass_index(
+            current_subpass,
+            self.state.subpass_count,
+            self.state.active_subpass_mask,
+        );
+        debug_assert!(next_subpass <= self.state.subpass_count);
+        self.state.active_subpass_index =
+            (next_subpass < self.state.subpass_count).then_some(next_subpass);
     }
     unsafe fn dispatch_transient(&mut self, _dispatch: &super::TransientDispatch) {
         unreachable!()
@@ -1299,5 +1354,53 @@ impl crate::CommandEncoder for super::CommandEncoder {
         _dependencies: &[&super::AccelerationStructure],
     ) {
         unimplemented!()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{first_active_subpass_index, next_active_subpass_index};
+
+    #[test]
+    fn subpass_traversal_sequential() {
+        let mask = None;
+        assert_eq!(first_active_subpass_index(3, mask), Some(0));
+        assert_eq!(next_active_subpass_index(0, 3, mask), 1);
+        assert_eq!(next_active_subpass_index(1, 3, mask), 2);
+        assert_eq!(next_active_subpass_index(2, 3, mask), 3);
+    }
+
+    #[test]
+    fn subpass_traversal_skips_culled_middle() {
+        let mask = Some(
+            wgt::ActiveSubpassMask::NONE
+                .with(wgt::SubpassIndex(0))
+                .with(wgt::SubpassIndex(2)),
+        );
+        assert_eq!(first_active_subpass_index(3, mask), Some(0));
+        assert_eq!(next_active_subpass_index(0, 3, mask), 2);
+        assert_eq!(next_active_subpass_index(2, 3, mask), 3);
+    }
+
+    #[test]
+    fn subpass_traversal_skips_initial_culled() {
+        let mask = Some(
+            wgt::ActiveSubpassMask::NONE
+                .with(wgt::SubpassIndex(2))
+                .with(wgt::SubpassIndex(3)),
+        );
+        assert_eq!(first_active_subpass_index(4, mask), Some(2));
+    }
+
+    #[test]
+    fn subpass_traversal_all_culled() {
+        let mask = Some(wgt::ActiveSubpassMask::NONE);
+        assert_eq!(first_active_subpass_index(4, mask), None);
+    }
+
+    #[test]
+    fn subpass_traversal_zero_subpasses() {
+        let mask = Some(wgt::ActiveSubpassMask::NONE);
+        assert_eq!(first_active_subpass_index(0, mask), None);
     }
 }

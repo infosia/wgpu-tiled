@@ -667,6 +667,20 @@ impl super::Adapter {
             super::PrivateCapabilities::MULTISAMPLED_RENDER_TO_TEXTURE,
             extensions.contains("GL_EXT_multisampled_render_to_texture"),
         );
+        private_caps.set(
+            super::PrivateCapabilities::SHADER_FRAMEBUFFER_FETCH,
+            extensions.contains("GL_EXT_shader_framebuffer_fetch")
+                || extensions.contains("EXT_shader_framebuffer_fetch"),
+        );
+
+        // TODO(Phase 12): enable once GLES begin_render_pass/next_subpass consumes
+        // subpass and transient descriptors end-to-end.
+        features.set(
+            wgt::Features::TRANSIENT_ATTACHMENTS | wgt::Features::MULTI_SUBPASS,
+            false,
+        );
+        // TODO(Phase 10): enable once naga GLSL framebuffer-fetch codegen lands.
+        features.set(wgt::Features::FRAMEBUFFER_FETCH, false);
 
         // GLSL ES 3.10+ / GLSL 4.30+ natively support coherent/volatile qualifiers
         // on storage buffers. These were introduced alongside storage buffer support.

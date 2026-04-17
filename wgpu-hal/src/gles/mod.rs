@@ -238,6 +238,8 @@ bitflags::bitflags! {
         const FULLY_FEATURED_INSTANCING = 1 << 16;
         /// Supports direct multisampled rendering to a texture without needing a resolve texture.
         const MULTISAMPLED_RENDER_TO_TEXTURE = 1 << 17;
+        /// Supports `EXT_shader_framebuffer_fetch`.
+        const SHADER_FRAMEBUFFER_FETCH = 1 << 18;
     }
 }
 
@@ -533,9 +535,25 @@ pub struct TextureView {
 impl crate::DynTextureView for TextureView {}
 
 #[derive(Debug)]
-pub struct TransientAttachment;
+pub struct TransientAttachment {
+    raw: glow::Renderbuffer,
+    // TODO(Phase 12): these become load-bearing once subpass transient attachments are consumed.
+    #[allow(dead_code)]
+    format: wgt::TextureFormat,
+    #[allow(dead_code)]
+    width: u32,
+    #[allow(dead_code)]
+    height: u32,
+    #[allow(dead_code)]
+    sample_count: u32,
+}
 
 impl crate::DynTransientAttachment for TransientAttachment {}
+
+#[cfg(send_sync)]
+unsafe impl Sync for TransientAttachment {}
+#[cfg(send_sync)]
+unsafe impl Send for TransientAttachment {}
 
 #[derive(Debug)]
 pub struct TransientDispatch;
