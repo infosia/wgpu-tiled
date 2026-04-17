@@ -48,7 +48,7 @@ use crate::{
     resource::{
         self, Buffer, ExternalTexture, Fallible, Labeled, ParentDevice, QuerySet,
         RawResourceAccess, Sampler, StagingBuffer, Texture, TextureView,
-        TextureViewNotRenderableReason, Tlas, TrackingData,
+        TextureViewNotRenderableReason, Tlas, TrackingData, TransientAttachment, TransientDispatch,
     },
     resource_log,
     snatch::{SnatchGuard, SnatchLock, Snatchable},
@@ -4936,6 +4936,106 @@ impl Device {
         Ok(query_set)
     }
 
+    fn validate_transient_attachment_feature(
+        features: wgt::Features,
+    ) -> Result<(), resource::CreateTransientAttachmentError> {
+        if !features.contains(wgt::Features::TRANSIENT_ATTACHMENTS) {
+            return Err(MissingFeatures(wgt::Features::TRANSIENT_ATTACHMENTS).into());
+        }
+        Ok(())
+    }
+
+    fn validate_transient_attachment_descriptor(
+        desc: &resource::TransientAttachmentDescriptor,
+        format_supports_render_attachment: bool,
+    ) -> Result<(), resource::CreateTransientAttachmentError> {
+        use resource::CreateTransientAttachmentError as Error;
+
+        let (width, height) = match desc.size {
+            wgt::TransientSize::MatchTarget => return Err(Error::UnresolvableSize),
+            wgt::TransientSize::Explicit { width, height } => (width, height),
+        };
+        if width == 0 || height == 0 {
+            return Err(Error::InvalidSize);
+        }
+        if desc.sample_count == 0 {
+            return Err(Error::InvalidSampleCount);
+        }
+        if !format_supports_render_attachment {
+            return Err(Error::InvalidFormat(desc.format));
+        }
+
+        Ok(())
+    }
+
+    fn validate_transient_dispatch_feature(
+        features: wgt::Features,
+    ) -> Result<(), resource::CreateTransientDispatchError> {
+        if !features.contains(wgt::Features::PROGRAMMABLE_TILE_DISPATCH) {
+            return Err(MissingFeatures(wgt::Features::PROGRAMMABLE_TILE_DISPATCH).into());
+        }
+        Ok(())
+    }
+
+    fn validate_transient_dispatch_descriptor(
+        desc: &resource::TransientDispatchDescriptor,
+    ) -> Result<(), resource::CreateTransientDispatchError> {
+        use resource::CreateTransientDispatchError as Error;
+        if desc.tile_width == 0 || desc.tile_height == 0 {
+            return Err(Error::InvalidTileSize);
+        }
+        Ok(())
+    }
+
+    pub fn create_transient_attachment(
+        self: &Arc<Self>,
+        desc: &resource::TransientAttachmentDescriptor,
+    ) -> Result<Arc<TransientAttachment>, resource::CreateTransientAttachmentError> {
+        self.check_is_valid()?;
+        Self::validate_transient_attachment_feature(self.features)?;
+
+        let format_features = self.describe_format_features(desc.format)?;
+        Self::validate_transient_attachment_descriptor(
+            desc,
+            format_features
+                .allowed_usages
+                .contains(wgt::TextureUsages::RENDER_ATTACHMENT),
+        )?;
+
+        let raw = unsafe { self.raw().create_transient_attachment(desc) }
+            .map_err(|e| self.handle_hal_error_with_nonfatal_oom(e))?;
+
+        let transient_attachment = Arc::new(TransientAttachment {
+            raw: ManuallyDrop::new(raw),
+            device: self.clone(),
+            tracking_data: TrackingData::new(self.tracker_indices.transient_attachments.clone()),
+            desc: *desc,
+        });
+
+        Ok(transient_attachment)
+    }
+
+    pub fn create_transient_dispatch(
+        self: &Arc<Self>,
+        desc: &resource::TransientDispatchDescriptor,
+    ) -> Result<Arc<TransientDispatch>, resource::CreateTransientDispatchError> {
+        self.check_is_valid()?;
+        Self::validate_transient_dispatch_feature(self.features)?;
+        Self::validate_transient_dispatch_descriptor(desc)?;
+
+        let raw = unsafe { self.raw().create_transient_dispatch(desc) }
+            .map_err(|e| self.handle_hal_error_with_nonfatal_oom(e))?;
+
+        let transient_dispatch = Arc::new(TransientDispatch {
+            raw: ManuallyDrop::new(raw),
+            device: self.clone(),
+            tracking_data: TrackingData::new(self.tracker_indices.transient_dispatches.clone()),
+            desc: *desc,
+        });
+
+        Ok(transient_dispatch)
+    }
+
     pub fn configure_surface(
         self: &Arc<Self>,
         surface: &crate::instance::Surface,
@@ -5271,3 +5371,106 @@ impl Device {
 crate::impl_resource_type!(Device);
 crate::impl_labeled!(Device);
 crate::impl_storage_item!(Device);
+
+#[cfg(test)]
+mod tests {
+    use super::Device;
+    use crate::resource::{
+        CreateTransientAttachmentError, CreateTransientDispatchError,
+        TransientAttachmentDescriptor, TransientDispatchDescriptor,
+    };
+    use wgt::{Features, TextureFormat, TransientSize};
+
+    #[test]
+    fn transient_attachment_feature_check_reports_missing_feature() {
+        let error = Device::validate_transient_attachment_feature(Features::empty()).unwrap_err();
+        assert!(matches!(
+            error,
+            CreateTransientAttachmentError::MissingFeatures(_)
+        ));
+    }
+
+    #[test]
+    fn transient_attachment_descriptor_rejects_unresolvable_size() {
+        let desc = TransientAttachmentDescriptor {
+            format: TextureFormat::Rgba8Unorm,
+            size: TransientSize::MatchTarget,
+            sample_count: 1,
+        };
+        let error = Device::validate_transient_attachment_descriptor(&desc, true).unwrap_err();
+        assert!(matches!(
+            error,
+            CreateTransientAttachmentError::UnresolvableSize
+        ));
+    }
+
+    #[test]
+    fn transient_attachment_descriptor_rejects_zero_size() {
+        let desc = TransientAttachmentDescriptor {
+            format: TextureFormat::Rgba8Unorm,
+            size: TransientSize::Explicit {
+                width: 0,
+                height: 1,
+            },
+            sample_count: 1,
+        };
+        let error = Device::validate_transient_attachment_descriptor(&desc, true).unwrap_err();
+        assert!(matches!(error, CreateTransientAttachmentError::InvalidSize));
+    }
+
+    #[test]
+    fn transient_attachment_descriptor_rejects_zero_sample_count() {
+        let desc = TransientAttachmentDescriptor {
+            format: TextureFormat::Rgba8Unorm,
+            size: TransientSize::Explicit {
+                width: 1,
+                height: 1,
+            },
+            sample_count: 0,
+        };
+        let error = Device::validate_transient_attachment_descriptor(&desc, true).unwrap_err();
+        assert!(matches!(
+            error,
+            CreateTransientAttachmentError::InvalidSampleCount
+        ));
+    }
+
+    #[test]
+    fn transient_attachment_descriptor_rejects_non_renderable_format_usage() {
+        let desc = TransientAttachmentDescriptor {
+            format: TextureFormat::Rgba8Unorm,
+            size: TransientSize::Explicit {
+                width: 1,
+                height: 1,
+            },
+            sample_count: 1,
+        };
+        let error = Device::validate_transient_attachment_descriptor(&desc, false).unwrap_err();
+        assert!(matches!(
+            error,
+            CreateTransientAttachmentError::InvalidFormat(TextureFormat::Rgba8Unorm)
+        ));
+    }
+
+    #[test]
+    fn transient_dispatch_feature_check_reports_missing_feature() {
+        let error = Device::validate_transient_dispatch_feature(Features::empty()).unwrap_err();
+        assert!(matches!(
+            error,
+            CreateTransientDispatchError::MissingFeatures(_)
+        ));
+    }
+
+    #[test]
+    fn transient_dispatch_descriptor_rejects_zero_tile_dimension() {
+        let desc = TransientDispatchDescriptor {
+            tile_width: 0,
+            tile_height: 8,
+        };
+        let error = Device::validate_transient_dispatch_descriptor(&desc).unwrap_err();
+        assert!(matches!(
+            error,
+            CreateTransientDispatchError::InvalidTileSize
+        ));
+    }
+}

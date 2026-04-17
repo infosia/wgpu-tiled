@@ -2620,6 +2620,11 @@ impl dispatch::CommandEncoderInterface for CoreCommandEncoder {
                 color_attachments: Borrowed(&colors),
                 depth_stencil_attachment: depth_stencil.as_ref(),
                 occlusion_query_set: desc.occlusion_query_set.map(|qs| qs.inner.as_core().id),
+                subpasses: Borrowed(&[]),
+                subpass_dependencies: Borrowed(&[]),
+                transient_attachments: Borrowed(&[]),
+                transient_memory_hint: wgt::TransientMemoryHint::default(),
+                active_subpass_mask: None,
                 multiview_mask: desc.multiview_mask,
             },
         );

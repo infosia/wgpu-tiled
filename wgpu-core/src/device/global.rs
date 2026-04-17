@@ -1324,6 +1324,86 @@ impl Global {
         }
     }
 
+    pub fn device_create_transient_attachment(
+        &self,
+        device_id: DeviceId,
+        desc: &resource::TransientAttachmentDescriptor,
+        id_in: Option<id::TransientAttachmentId>,
+    ) -> (
+        id::TransientAttachmentId,
+        Option<resource::CreateTransientAttachmentError>,
+    ) {
+        profiling::scope!("Device::create_transient_attachment");
+
+        let hub = &self.hub;
+        let fid = hub.transient_attachments.prepare(id_in);
+
+        let error = 'error: {
+            let device = self.hub.devices.get(device_id);
+
+            let transient_attachment = match device.create_transient_attachment(desc) {
+                Ok(transient_attachment) => transient_attachment,
+                Err(err) => break 'error err,
+            };
+
+            let id = fid.assign(Fallible::Valid(transient_attachment));
+            api_log!("Device::create_transient_attachment -> {id:?}");
+
+            return (id, None);
+        };
+
+        let id = fid.assign(Fallible::Invalid(Arc::new(String::new())));
+        (id, Some(error))
+    }
+
+    pub fn transient_attachment_drop(&self, transient_attachment_id: id::TransientAttachmentId) {
+        profiling::scope!("TransientAttachment::drop");
+        api_log!("TransientAttachment::drop {transient_attachment_id:?}");
+
+        let hub = &self.hub;
+        let _transient_attachment = hub.transient_attachments.remove(transient_attachment_id);
+    }
+
+    pub fn device_create_transient_dispatch(
+        &self,
+        device_id: DeviceId,
+        desc: &resource::TransientDispatchDescriptor,
+        id_in: Option<id::TransientDispatchId>,
+    ) -> (
+        id::TransientDispatchId,
+        Option<resource::CreateTransientDispatchError>,
+    ) {
+        profiling::scope!("Device::create_transient_dispatch");
+
+        let hub = &self.hub;
+        let fid = hub.transient_dispatches.prepare(id_in);
+
+        let error = 'error: {
+            let device = self.hub.devices.get(device_id);
+
+            let transient_dispatch = match device.create_transient_dispatch(desc) {
+                Ok(transient_dispatch) => transient_dispatch,
+                Err(err) => break 'error err,
+            };
+
+            let id = fid.assign(Fallible::Valid(transient_dispatch));
+            api_log!("Device::create_transient_dispatch -> {id:?}");
+
+            return (id, None);
+        };
+
+        let id = fid.assign(Fallible::Invalid(Arc::new(String::new())));
+        (id, Some(error))
+    }
+
+    pub fn transient_dispatch_drop(&self, transient_dispatch_id: id::TransientDispatchId) {
+        profiling::scope!("TransientDispatch::drop");
+        api_log!("TransientDispatch::drop {transient_dispatch_id:?}");
+
+        let hub = &self.hub;
+        let _transient_dispatch = hub.transient_dispatches.remove(transient_dispatch_id);
+    }
+
     pub fn device_create_render_pipeline(
         &self,
         device_id: DeviceId,

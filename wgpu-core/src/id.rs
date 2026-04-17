@@ -336,6 +336,8 @@ ids! {
     pub type RenderBundleEncoderId RenderBundleEncoder;
     pub type RenderBundleId RenderBundle;
     pub type QuerySetId QuerySet;
+    pub type TransientAttachmentId TransientAttachment;
+    pub type TransientDispatchId TransientDispatch;
     pub type BlasId Blas;
     pub type TlasId Tlas;
 }

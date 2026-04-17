@@ -136,6 +136,11 @@ impl GPUCommandEncoder {
       occlusion_query_set: descriptor
         .occlusion_query_set
         .map(|query_set| query_set.id),
+      subpasses: Cow::Borrowed(&[]),
+      subpass_dependencies: Cow::Borrowed(&[]),
+      transient_attachments: Cow::Borrowed(&[]),
+      transient_memory_hint: wgpu_types::TransientMemoryHint::default(),
+      active_subpass_mask: None,
       multiview_mask: NonZero::new(descriptor.multiview_mask),
     };
 

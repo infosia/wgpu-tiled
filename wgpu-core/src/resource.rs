@@ -2190,6 +2190,136 @@ impl QuerySet {
     }
 }
 
+#[derive(Clone, Debug, Error)]
+#[non_exhaustive]
+pub enum CreateTransientAttachmentError {
+    #[error(transparent)]
+    Device(#[from] DeviceError),
+    #[error(transparent)]
+    MissingFeatures(#[from] MissingFeatures),
+    #[error("Transient attachments require a non-zero explicit size")]
+    InvalidSize,
+    #[error("Transient attachments require a non-zero sample_count")]
+    InvalidSampleCount,
+    #[error("Transient attachment format {0:?} does not support render attachment usage")]
+    InvalidFormat(wgt::TextureFormat),
+    #[error("Transient attachment size is `MatchTarget`, which is not valid at creation time")]
+    UnresolvableSize,
+}
+
+impl WebGpuError for CreateTransientAttachmentError {
+    fn webgpu_error_type(&self) -> ErrorType {
+        match self {
+            Self::Device(e) => e.webgpu_error_type(),
+            Self::MissingFeatures(e) => e.webgpu_error_type(),
+            Self::InvalidSize
+            | Self::InvalidSampleCount
+            | Self::InvalidFormat(_)
+            | Self::UnresolvableSize => ErrorType::Validation,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Error)]
+#[non_exhaustive]
+pub enum CreateTransientDispatchError {
+    #[error(transparent)]
+    Device(#[from] DeviceError),
+    #[error(transparent)]
+    MissingFeatures(#[from] MissingFeatures),
+    #[error("Tile dispatch dimensions must be non-zero")]
+    InvalidTileSize,
+}
+
+impl WebGpuError for CreateTransientDispatchError {
+    fn webgpu_error_type(&self) -> ErrorType {
+        match self {
+            Self::Device(e) => e.webgpu_error_type(),
+            Self::MissingFeatures(e) => e.webgpu_error_type(),
+            Self::InvalidTileSize => ErrorType::Validation,
+        }
+    }
+}
+
+pub type TransientAttachmentDescriptor = wgt::TransientAttachmentDescriptor;
+pub type TransientDispatchDescriptor = wgt::TransientDispatchDescriptor;
+
+#[derive(Debug)]
+pub struct TransientAttachment {
+    pub(crate) raw: ManuallyDrop<Box<dyn hal::DynTransientAttachment>>,
+    pub(crate) device: Arc<Device>,
+    pub(crate) tracking_data: TrackingData,
+    #[allow(dead_code)]
+    pub(crate) desc: wgt::TransientAttachmentDescriptor,
+}
+
+impl Drop for TransientAttachment {
+    fn drop(&mut self) {
+        resource_log!("Destroy raw {}", self.error_ident());
+        // SAFETY: We are in the Drop impl and we don't use self.raw anymore after this point.
+        let raw = unsafe { ManuallyDrop::take(&mut self.raw) };
+        unsafe {
+            self.device.raw().destroy_transient_attachment(raw);
+        }
+    }
+}
+
+crate::impl_resource_type!(TransientAttachment);
+crate::impl_parent_device!(TransientAttachment);
+crate::impl_storage_item!(TransientAttachment);
+crate::impl_trackable!(TransientAttachment);
+
+impl Labeled for TransientAttachment {
+    fn label(&self) -> &str {
+        "TransientAttachment"
+    }
+}
+
+impl TransientAttachment {
+    #[allow(dead_code)]
+    pub(crate) fn raw(&self) -> &dyn hal::DynTransientAttachment {
+        self.raw.as_ref()
+    }
+}
+
+#[derive(Debug)]
+pub struct TransientDispatch {
+    pub(crate) raw: ManuallyDrop<Box<dyn hal::DynTransientDispatch>>,
+    pub(crate) device: Arc<Device>,
+    pub(crate) tracking_data: TrackingData,
+    #[allow(dead_code)]
+    pub(crate) desc: wgt::TransientDispatchDescriptor,
+}
+
+impl Drop for TransientDispatch {
+    fn drop(&mut self) {
+        resource_log!("Destroy raw {}", self.error_ident());
+        // SAFETY: We are in the Drop impl and we don't use self.raw anymore after this point.
+        let raw = unsafe { ManuallyDrop::take(&mut self.raw) };
+        unsafe {
+            self.device.raw().destroy_transient_dispatch(raw);
+        }
+    }
+}
+
+crate::impl_resource_type!(TransientDispatch);
+crate::impl_parent_device!(TransientDispatch);
+crate::impl_storage_item!(TransientDispatch);
+crate::impl_trackable!(TransientDispatch);
+
+impl Labeled for TransientDispatch {
+    fn label(&self) -> &str {
+        "TransientDispatch"
+    }
+}
+
+impl TransientDispatch {
+    #[allow(dead_code)]
+    pub(crate) fn raw(&self) -> &dyn hal::DynTransientDispatch {
+        self.raw.as_ref()
+    }
+}
+
 pub type BlasDescriptor<'a> = wgt::CreateBlasDescriptor<Label<'a>>;
 pub type TlasDescriptor<'a> = wgt::CreateTlasDescriptor<Label<'a>>;
 
