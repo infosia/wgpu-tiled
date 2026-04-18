@@ -255,6 +255,10 @@ impl IntoTrace for ArcCommand {
                 depth_stencil_attachment,
                 timestamp_writes,
                 occlusion_query_set,
+                subpasses,
+                subpass_dependencies,
+                transient_memory_hint,
+                active_subpass_mask,
                 multiview_mask,
             } => Command::RunRenderPass {
                 pass: pass.into_trace(),
@@ -262,6 +266,10 @@ impl IntoTrace for ArcCommand {
                 depth_stencil_attachment: depth_stencil_attachment.map(|d| d.into_trace()),
                 timestamp_writes: timestamp_writes.map(|tw| tw.into_trace()),
                 occlusion_query_set: occlusion_query_set.map(|q| q.to_trace()),
+                subpasses,
+                subpass_dependencies,
+                transient_memory_hint,
+                active_subpass_mask,
                 multiview_mask,
             },
             ArcCommand::BuildAccelerationStructures { blas, tlas } => {

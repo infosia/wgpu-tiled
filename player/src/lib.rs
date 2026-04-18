@@ -920,6 +920,10 @@ impl Player {
                 depth_stencil_attachment,
                 timestamp_writes,
                 occlusion_query_set,
+                subpasses,
+                subpass_dependencies,
+                transient_memory_hint,
+                active_subpass_mask,
                 multiview_mask,
             } => Command::RunRenderPass {
                 pass: self.resolve_render_pass(pass),
@@ -928,6 +932,10 @@ impl Player {
                     .map(|att| self.resolve_depth_stencil_attachment(att)),
                 timestamp_writes: timestamp_writes.map(|tw| self.resolve_pass_timestamp_writes(tw)),
                 occlusion_query_set: occlusion_query_set.map(|qs| self.resolve_query_set_id(qs)),
+                subpasses,
+                subpass_dependencies,
+                transient_memory_hint,
+                active_subpass_mask,
                 multiview_mask,
             },
             Command::BuildAccelerationStructures { blas, tlas } => {

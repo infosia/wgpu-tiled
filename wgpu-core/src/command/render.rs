@@ -1,5 +1,5 @@
 use alloc::{borrow::Cow, sync::Arc, vec::Vec};
-use core::{convert::Infallible, fmt, num::NonZeroU32, ops::Range, str};
+use core::{convert::Infallible, fmt, mem, num::NonZeroU32, ops::Range, str};
 use smallvec::SmallVec;
 
 use arrayvec::ArrayVec;
@@ -242,6 +242,18 @@ pub struct SubpassDescriptor<'a> {
     pub input_attachments: Cow<'a, [SubpassInputAttachment]>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+/// Owned subpass descriptor used in command recording and trace playback.
+///
+/// This struct contains only plain data and no resource references, so trace
+/// conversion can pass it through directly without a custom `IntoTrace` impl.
+pub struct ArcSubpassDescriptor {
+    pub color_attachment_indices: Vec<u32>,
+    pub uses_depth_stencil: bool,
+    pub input_attachments: Vec<SubpassInputAttachment>,
+}
+
 /// Describes the attachments of a render pass.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RenderPassDescriptor<'a> {
@@ -284,6 +296,9 @@ struct ArcRenderPassDescriptor<'a> {
     /// Number of subpasses defined for this render pass.
     /// TODO(Phase 12): replace this scalar with per-subpass `RenderPassContext` entries.
     pub subpass_count: u32,
+    pub subpasses: Vec<ArcSubpassDescriptor>,
+    pub subpass_dependencies: Vec<wgt::SubpassDependency>,
+    pub transient_memory_hint: wgt::TransientMemoryHint,
     /// Optional set of active subpasses; `None` means all subpasses active.
     pub active_subpass_mask: Option<ActiveSubpassMask>,
     /// The multiview array layers that will be used
@@ -309,6 +324,8 @@ fn validate_subpasses(
     subpasses: &[SubpassDescriptor<'_>],
     active_subpass_mask: Option<ActiveSubpassMask>,
     max_subpasses: u32,
+    color_attachment_count: usize,
+    has_depth_stencil_attachment: bool,
 ) -> Result<(), RenderPassErrorInner> {
     if subpasses.is_empty() {
         return Ok(());
@@ -324,6 +341,22 @@ fn validate_subpasses(
     }
 
     for (dst_subpass, subpass) in subpasses.iter().enumerate() {
+        if subpass.uses_depth_stencil && !has_depth_stencil_attachment {
+            return Err(RenderPassErrorInner::SubpassDeclaresDepthWithoutPass {
+                subpass: dst_subpass as u32,
+            });
+        }
+        for &attachment_index in subpass.color_attachment_indices.iter() {
+            if attachment_index as usize >= color_attachment_count {
+                return Err(
+                    RenderPassErrorInner::SubpassColorAttachmentIndexOutOfRange {
+                        subpass: dst_subpass as u32,
+                        attachment_index,
+                        color_attachment_count: color_attachment_count as u32,
+                    },
+                );
+            }
+        }
         for input in subpass.input_attachments.iter() {
             let src_subpass = match input.source {
                 SubpassInputSource::Color { subpass, .. }
@@ -395,6 +428,17 @@ fn validate_transient_attachment_sizes(
     Ok(())
 }
 
+fn validate_transient_attachment_wiring(
+    transient_attachments: &[wgt::TransientAttachmentDescriptor],
+) -> Result<(), RenderPassErrorInner> {
+    if !transient_attachments.is_empty() {
+        return Err(RenderPassErrorInner::TransientAttachmentsUnsupported {
+            count: transient_attachments.len() as u32,
+        });
+    }
+    Ok(())
+}
+
 fn validate_bundle_execution_support(subpass_count: u32) -> Result<(), RenderPassErrorInner> {
     // Bundles are recorded as pass commands, so this is validated when the command is issued.
     // TODO(Phase 11): hoist this into begin-pass validation once subpass command streams are explicit.
@@ -458,6 +502,9 @@ pub struct RenderPass {
     occlusion_query_set: Option<Arc<QuerySet>>,
     /// TODO(Phase 12): track per-subpass `RenderPassContext` values for pipeline compatibility.
     subpass_count: u32,
+    subpasses: Vec<ArcSubpassDescriptor>,
+    subpass_dependencies: Vec<wgt::SubpassDependency>,
+    transient_memory_hint: wgt::TransientMemoryHint,
     active_subpass_mask: Option<ActiveSubpassMask>,
     current_subpass_index: Option<u32>,
     multiview_mask: Option<NonZeroU32>,
@@ -477,6 +524,9 @@ impl RenderPass {
             depth_stencil_attachment,
             occlusion_query_set,
             subpass_count,
+            subpasses,
+            subpass_dependencies,
+            transient_memory_hint,
             active_subpass_mask,
             multiview_mask,
         } = desc;
@@ -489,6 +539,9 @@ impl RenderPass {
             timestamp_writes,
             occlusion_query_set,
             subpass_count,
+            subpasses,
+            subpass_dependencies,
+            transient_memory_hint,
             active_subpass_mask,
             current_subpass_index: first_active_subpass_index(subpass_count, active_subpass_mask),
             multiview_mask,
@@ -507,6 +560,9 @@ impl RenderPass {
             timestamp_writes: None,
             occlusion_query_set: None,
             subpass_count: 0,
+            subpasses: Vec::new(),
+            subpass_dependencies: Vec::new(),
+            transient_memory_hint: wgt::TransientMemoryHint::Auto,
             active_subpass_mask: None,
             current_subpass_index: None,
             multiview_mask: None,
@@ -997,6 +1053,14 @@ pub enum RenderPassErrorInner {
     SubpassCountExceeded { count: u32, maximum: u32 },
     #[error("subpass {dst_subpass} reads an input attachment from subpass {src_subpass}, which is not earlier")]
     InputAttachmentReferencesLaterSubpass { src_subpass: u32, dst_subpass: u32 },
+    #[error("subpass {subpass} declares depth/stencil usage, but render pass has no depth/stencil attachment")]
+    SubpassDeclaresDepthWithoutPass { subpass: u32 },
+    #[error("subpass {subpass} references color attachment index {attachment_index}, but render pass has only {color_attachment_count} color attachments")]
+    SubpassColorAttachmentIndexOutOfRange {
+        subpass: u32,
+        attachment_index: u32,
+        color_attachment_count: u32,
+    },
     #[error(
         "render pass defines {count} subpasses but the active subpass mask disables all of them"
     )]
@@ -1014,6 +1078,8 @@ pub enum RenderPassErrorInner {
         "transient attachment size MatchTarget requires at least one persistent color or depth/stencil attachment in the render pass"
     )]
     TransientSizeUnresolvable,
+    #[error("render pass defines {count} transient attachments, but transient attachments are not yet wired for render pass execution")]
+    TransientAttachmentsUnsupported { count: u32 },
     #[error("render bundles are not supported in subpass mode")]
     RenderBundleInSubpassPass,
     #[error(transparent)]
@@ -1120,11 +1186,14 @@ impl WebGpuError for RenderPassError {
             | RenderPassErrorInner::SubpassesRequireFeature
             | RenderPassErrorInner::SubpassCountExceeded { .. }
             | RenderPassErrorInner::InputAttachmentReferencesLaterSubpass { .. }
+            | RenderPassErrorInner::SubpassDeclaresDepthWithoutPass { .. }
+            | RenderPassErrorInner::SubpassColorAttachmentIndexOutOfRange { .. }
             | RenderPassErrorInner::NoActiveSubpasses { .. }
             | RenderPassErrorInner::ActiveSubpassReadsFromCulled { .. }
             | RenderPassErrorInner::NextSubpassInLegacyPass
             | RenderPassErrorInner::NextSubpassPastLast { .. }
             | RenderPassErrorInner::TransientSizeUnresolvable
+            | RenderPassErrorInner::TransientAttachmentsUnsupported { .. }
             | RenderPassErrorInner::RenderBundleInSubpassPass
             | RenderPassErrorInner::PassEnded => ErrorType::Validation,
         }
@@ -1213,6 +1282,10 @@ impl RenderPassInfo {
         pending_query_resets: &mut QueryResetMap,
         pending_discard_init_fixups: &mut SurfacesInDiscardState,
         snatch_guard: &SnatchGuard<'_>,
+        subpasses: &[ArcSubpassDescriptor],
+        subpass_dependencies: &[wgt::SubpassDependency],
+        transient_memory_hint: wgt::TransientMemoryHint,
+        active_subpass_mask: Option<ActiveSubpassMask>,
         multiview_mask: Option<NonZeroU32>,
     ) -> Result<Self, RenderPassErrorInner> {
         profiling::scope!("RenderPassInfo::start");
@@ -1687,17 +1760,44 @@ impl RenderPassInfo {
             None
         };
 
-        // TODO(Phase 11): forward validated subpasses/dependencies/transient attachments to HAL.
+        let mut hal_subpasses = Vec::with_capacity(subpasses.len());
+        for subpass in subpasses {
+            hal_subpasses.push(hal::Subpass {
+                color_attachments: &[],
+                color_attachment_indices: &subpass.color_attachment_indices,
+                depth_stencil_attachment: if subpass.uses_depth_stencil {
+                    depth_stencil.as_ref().map(|depth_stencil| {
+                        hal::SubpassDepthStencilAttachment::Persistent(
+                            hal::DepthStencilAttachment {
+                                target: hal::Attachment {
+                                    view: depth_stencil.target.view,
+                                    usage: depth_stencil.target.usage,
+                                },
+                                depth_ops: depth_stencil.depth_ops,
+                                stencil_ops: depth_stencil.stencil_ops,
+                                clear_value: depth_stencil.clear_value,
+                            },
+                        )
+                    })
+                } else {
+                    None
+                },
+                input_attachments: &subpass.input_attachments,
+            });
+        }
         let hal_desc = hal::RenderPassDescriptor {
             label: hal_label,
             extent,
             sample_count,
             color_attachments: &color_attachments_hal,
             depth_stencil_attachment: depth_stencil,
+            subpasses: &hal_subpasses,
+            subpass_dependencies,
+            transient_memory_hint,
+            active_subpass_mask,
             multiview_mask,
             timestamp_writes: timestamp_writes_hal,
             occlusion_query_set: occlusion_query_set_hal,
-            ..Default::default()
         };
         unsafe {
             encoder
@@ -1855,13 +1955,27 @@ impl Global {
                 &desc.subpasses,
                 desc.active_subpass_mask,
                 device.limits.max_subpasses,
+                desc.color_attachments.len(),
+                desc.depth_stencil_attachment.is_some(),
             )?;
             validate_transient_attachment_sizes(
                 &desc.transient_attachments,
                 desc.color_attachments.iter().any(Option::is_some)
                     || desc.depth_stencil_attachment.is_some(),
             )?;
-            arc_desc.subpass_count = desc.subpasses.len() as u32;
+            validate_transient_attachment_wiring(&desc.transient_attachments)?;
+            arc_desc.subpasses = desc
+                .subpasses
+                .iter()
+                .map(|subpass| ArcSubpassDescriptor {
+                    color_attachment_indices: subpass.color_attachment_indices.to_vec(),
+                    uses_depth_stencil: subpass.uses_depth_stencil,
+                    input_attachments: subpass.input_attachments.to_vec(),
+                })
+                .collect();
+            arc_desc.subpass_dependencies = desc.subpass_dependencies.to_vec();
+            arc_desc.transient_memory_hint = desc.transient_memory_hint;
+            arc_desc.subpass_count = arc_desc.subpasses.len() as u32;
             arc_desc.active_subpass_mask = desc.active_subpass_mask;
 
             for color_attachment in desc.color_attachments.iter() {
@@ -2000,6 +2114,9 @@ impl Global {
                     depth_stencil_attachment: None,
                     occlusion_query_set: None,
                     subpass_count: 0,
+                    subpasses: Vec::new(),
+                    subpass_dependencies: Vec::new(),
+                    transient_memory_hint: wgt::TransientMemoryHint::Auto,
                     active_subpass_mask: None,
                     multiview_mask: None,
                 };
@@ -2086,10 +2203,21 @@ impl Global {
                 depth_stencil_attachment: pass.depth_stencil_attachment.take(),
                 timestamp_writes: pass.timestamp_writes.take(),
                 occlusion_query_set: pass.occlusion_query_set.take(),
+                subpasses: mem::take(&mut pass.subpasses),
+                subpass_dependencies: mem::take(&mut pass.subpass_dependencies),
+                transient_memory_hint: pass.transient_memory_hint,
+                active_subpass_mask: pass.active_subpass_mask,
                 multiview_mask: pass.multiview_mask,
             })
         })
     }
+}
+
+pub(super) struct EncodeRenderPassSubpassData {
+    pub subpasses: Vec<ArcSubpassDescriptor>,
+    pub subpass_dependencies: Vec<wgt::SubpassDependency>,
+    pub transient_memory_hint: wgt::TransientMemoryHint,
+    pub active_subpass_mask: Option<ActiveSubpassMask>,
 }
 
 pub(super) fn encode_render_pass(
@@ -2101,8 +2229,16 @@ pub(super) fn encode_render_pass(
     >,
     mut timestamp_writes: Option<ArcPassTimestampWrites>,
     occlusion_query_set: Option<Arc<QuerySet>>,
+    subpass_data: EncodeRenderPassSubpassData,
     multiview_mask: Option<NonZeroU32>,
 ) -> Result<(), RenderPassError> {
+    let EncodeRenderPassSubpassData {
+        subpasses,
+        subpass_dependencies,
+        transient_memory_hint,
+        active_subpass_mask,
+    } = subpass_data;
+
     let pass_scope = PassErrorScope::Pass;
 
     let device = parent_state.device;
@@ -2140,6 +2276,10 @@ pub(super) fn encode_render_pass(
             &mut pending_query_resets,
             &mut pending_discard_init_fixups,
             parent_state.snatch_guard,
+            &subpasses,
+            &subpass_dependencies,
+            transient_memory_hint,
+            active_subpass_mask,
             multiview_mask,
         )
         .map_pass_err(pass_scope)?;
@@ -4110,8 +4250,9 @@ mod tests {
 
     use super::{
         advance_subpass_index, validate_bundle_execution_support, validate_subpass_feature,
-        validate_subpasses, validate_transient_attachment_sizes, RenderPassError,
-        RenderPassErrorInner, SubpassDescriptor,
+        validate_subpasses, validate_transient_attachment_sizes,
+        validate_transient_attachment_wiring, RenderPassError, RenderPassErrorInner,
+        SubpassDescriptor,
     };
     use crate::command::PassErrorScope;
     use wgt::{
@@ -4134,7 +4275,7 @@ mod tests {
             }]),
         }];
 
-        let error = validate_subpasses(&subpasses, None, 8).unwrap_err();
+        let error = validate_subpasses(&subpasses, None, 8, 1, false).unwrap_err();
         assert!(matches!(
             error,
             RenderPassErrorInner::InputAttachmentReferencesLaterSubpass {
@@ -4158,7 +4299,8 @@ mod tests {
     #[test]
     fn validate_subpasses_rejects_empty_active_mask() {
         let subpasses = vec![SubpassDescriptor::default()];
-        let error = validate_subpasses(&subpasses, Some(ActiveSubpassMask(0)), 8).unwrap_err();
+        let error =
+            validate_subpasses(&subpasses, Some(ActiveSubpassMask(0)), 8, 0, false).unwrap_err();
         assert!(matches!(
             error,
             RenderPassErrorInner::NoActiveSubpasses { count: 1 }
@@ -4168,7 +4310,7 @@ mod tests {
     #[test]
     fn validate_subpasses_rejects_count_over_limit() {
         let subpasses = vec![SubpassDescriptor::default(), SubpassDescriptor::default()];
-        let error = validate_subpasses(&subpasses, None, 1).unwrap_err();
+        let error = validate_subpasses(&subpasses, None, 1, 0, false).unwrap_err();
         assert!(matches!(
             error,
             RenderPassErrorInner::SubpassCountExceeded {
@@ -4176,6 +4318,38 @@ mod tests {
                 maximum: 1
             }
         ));
+    }
+
+    #[test]
+    fn validate_subpasses_rejects_depth_without_pass_attachment() {
+        let subpasses = vec![SubpassDescriptor {
+            uses_depth_stencil: true,
+            ..Default::default()
+        }];
+        let error = validate_subpasses(&subpasses, None, 8, 0, false).unwrap_err();
+        assert!(matches!(
+            error,
+            RenderPassErrorInner::SubpassDeclaresDepthWithoutPass { subpass: 0 }
+        ));
+        assert!(validate_subpasses(&subpasses, None, 8, 0, true).is_ok());
+    }
+
+    #[test]
+    fn validate_subpasses_rejects_color_attachment_index_out_of_range() {
+        let subpasses = vec![SubpassDescriptor {
+            color_attachment_indices: Cow::Owned(vec![2]),
+            ..Default::default()
+        }];
+        let error = validate_subpasses(&subpasses, None, 8, 2, false).unwrap_err();
+        assert!(matches!(
+            error,
+            RenderPassErrorInner::SubpassColorAttachmentIndexOutOfRange {
+                subpass: 0,
+                attachment_index: 2,
+                color_attachment_count: 2,
+            }
+        ));
+        assert!(validate_subpasses(&subpasses, None, 8, 3, false).is_ok());
     }
 
     #[test]
@@ -4194,7 +4368,8 @@ mod tests {
             },
         ];
 
-        let error = validate_subpasses(&subpasses, Some(ActiveSubpassMask(0b10)), 8).unwrap_err();
+        let error =
+            validate_subpasses(&subpasses, Some(ActiveSubpassMask(0b10)), 8, 0, false).unwrap_err();
         assert!(matches!(
             error,
             RenderPassErrorInner::ActiveSubpassReadsFromCulled {
@@ -4219,6 +4394,24 @@ mod tests {
         ));
 
         assert!(validate_transient_attachment_sizes(&transient_attachments, true).is_ok());
+    }
+
+    #[test]
+    fn validate_transient_attachment_wiring_rejects_non_empty_list() {
+        let transient_attachments = [TransientAttachmentDescriptor {
+            format: TextureFormat::Rgba8Unorm,
+            size: TransientSize::Explicit {
+                width: 4,
+                height: 4,
+            },
+            sample_count: 1,
+        }];
+        let error = validate_transient_attachment_wiring(&transient_attachments).unwrap_err();
+        assert!(matches!(
+            error,
+            RenderPassErrorInner::TransientAttachmentsUnsupported { count: 1 }
+        ));
+        assert!(validate_transient_attachment_wiring(&[]).is_ok());
     }
 
     #[test]

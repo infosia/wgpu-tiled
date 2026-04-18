@@ -171,6 +171,10 @@ pub enum Command<R: ReferenceType> {
             Option<crate::command::ResolvedRenderPassDepthStencilAttachment<R::TextureView>>,
         timestamp_writes: Option<crate::command::PassTimestampWrites<R::QuerySet>>,
         occlusion_query_set: Option<R::QuerySet>,
+        subpasses: Vec<crate::command::ArcSubpassDescriptor>,
+        subpass_dependencies: Vec<wgt::SubpassDependency>,
+        transient_memory_hint: wgt::TransientMemoryHint,
+        active_subpass_mask: Option<wgt::ActiveSubpassMask>,
         multiview_mask: Option<NonZero<u32>>,
     },
     BuildAccelerationStructures {

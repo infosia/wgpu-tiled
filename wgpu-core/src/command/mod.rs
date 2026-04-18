@@ -57,10 +57,10 @@ pub use self::{
     encoder_command::{ArcCommand, ArcReferences, Command, IdReferences, ReferenceType},
     query::{QueryError, QueryUseError, ResolveError, SimplifiedQueryType},
     render::{
-        ArcRenderPassColorAttachment, AttachmentError, AttachmentErrorLocation,
-        ColorAttachmentError, ColorAttachments, LoadOp, PassChannel, RenderBasePass, RenderPass,
-        RenderPassColorAttachment, RenderPassDepthStencilAttachment, RenderPassDescriptor,
-        RenderPassError, RenderPassErrorInner, ResolvedPassChannel,
+        ArcRenderPassColorAttachment, ArcSubpassDescriptor, AttachmentError,
+        AttachmentErrorLocation, ColorAttachmentError, ColorAttachments, LoadOp, PassChannel,
+        RenderBasePass, RenderPass, RenderPassColorAttachment, RenderPassDepthStencilAttachment,
+        RenderPassDescriptor, RenderPassError, RenderPassErrorInner, ResolvedPassChannel,
         ResolvedRenderPassDepthStencilAttachment, StoreOp, SubpassDescriptor,
     },
     render_command::ArcRenderCommand,
@@ -1060,6 +1060,10 @@ impl CommandEncoder {
                         depth_stencil_attachment,
                         timestamp_writes,
                         occlusion_query_set,
+                        subpasses,
+                        subpass_dependencies,
+                        transient_memory_hint,
+                        active_subpass_mask,
                         multiview_mask,
                     } => {
                         api_log!(
@@ -1073,6 +1077,12 @@ impl CommandEncoder {
                             depth_stencil_attachment,
                             timestamp_writes,
                             occlusion_query_set,
+                            render::EncodeRenderPassSubpassData {
+                                subpasses,
+                                subpass_dependencies,
+                                transient_memory_hint,
+                                active_subpass_mask,
+                            },
                             multiview_mask,
                         );
                         match res.as_ref() {
