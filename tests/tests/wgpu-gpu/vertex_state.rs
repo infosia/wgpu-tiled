@@ -108,6 +108,7 @@ async fn set_array_stride_to_0(ctx: TestingContext) {
             })],
         }),
         multiview_mask: None,
+        subpass_target: None,
         cache: None,
     };
     let mut first_pipeline_desc = pipeline_desc.clone();

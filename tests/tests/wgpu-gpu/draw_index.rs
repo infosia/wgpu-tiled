@@ -60,6 +60,7 @@ fn fragment() -> @location(0) vec4<f32> {
                 })],
             }),
             multiview_mask: None,
+            subpass_target: None,
             cache: None,
         });
 }

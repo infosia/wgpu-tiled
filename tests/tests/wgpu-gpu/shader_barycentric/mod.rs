@@ -110,6 +110,7 @@ async fn barycentric(ctx: TestingContext, no_perspective: bool) {
                 })],
             }),
             multiview_mask: None,
+            subpass_target: None,
             cache: None,
         });
 

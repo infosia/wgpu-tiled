@@ -1612,6 +1612,7 @@ impl Global {
                 multisample: desc.multisample,
                 fragment,
                 multiview_mask: desc.multiview_mask,
+                subpass_target: desc.subpass_target.clone(),
                 cache,
             };
 

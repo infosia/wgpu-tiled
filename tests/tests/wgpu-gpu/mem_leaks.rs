@@ -127,6 +127,7 @@ async fn draw_test_with_reports(
                 })],
             }),
             multiview_mask: None,
+            subpass_target: None,
             cache: None,
         });
 

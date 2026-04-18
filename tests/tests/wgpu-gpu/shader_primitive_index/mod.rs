@@ -151,6 +151,7 @@ async fn pulling_common(
                 })],
             }),
             multiview_mask: None,
+            subpass_target: None,
             cache: None,
         });
 

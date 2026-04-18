@@ -1,4 +1,4 @@
-use alloc::{borrow::Cow, sync::Arc, vec::Vec};
+use alloc::{borrow::Cow, sync::Arc, vec, vec::Vec};
 use core::{convert::Infallible, fmt, mem, num::NonZeroU32, ops::Range, str};
 use smallvec::SmallVec;
 
@@ -68,6 +68,25 @@ fn store_hal_ops(store: StoreOp) -> hal::AttachmentOps {
         StoreOp::Store => hal::AttachmentOps::STORE,
         StoreOp::Discard => hal::AttachmentOps::STORE_DISCARD,
     }
+}
+
+fn transient_ops_from_hal_ops<V: Copy + Default>(
+    ops: hal::AttachmentOps,
+    clear_value: V,
+    location: AttachmentErrorLocation,
+) -> Result<wgt::TransientOps<V>, RenderPassErrorInner> {
+    if ops.contains(hal::AttachmentOps::STORE) {
+        return Err(RenderPassErrorInner::TransientAttachmentStoreUnsupported { location });
+    }
+    if ops.contains(hal::AttachmentOps::LOAD) {
+        return Err(RenderPassErrorInner::TransientAttachmentLoadUnsupported { location });
+    }
+    let load = if ops.contains(hal::AttachmentOps::LOAD_CLEAR) {
+        wgt::TransientLoadOp::Clear(clear_value)
+    } else {
+        wgt::TransientLoadOp::DontCare
+    };
+    Ok(wgt::TransientOps { load })
 }
 
 /// Describes an individual channel within a render pass, such as color, depth, or stencil.
@@ -428,17 +447,6 @@ fn validate_transient_attachment_sizes(
     Ok(())
 }
 
-fn validate_transient_attachment_wiring(
-    transient_attachments: &[wgt::TransientAttachmentDescriptor],
-) -> Result<(), RenderPassErrorInner> {
-    if !transient_attachments.is_empty() {
-        return Err(RenderPassErrorInner::TransientAttachmentsUnsupported {
-            count: transient_attachments.len() as u32,
-        });
-    }
-    Ok(())
-}
-
 fn validate_bundle_execution_support(subpass_count: u32) -> Result<(), RenderPassErrorInner> {
     // Bundles are recorded as pass commands, so this is validated when the command is issued.
     // TODO(Phase 11): hoist this into begin-pass validation once subpass command streams are explicit.
@@ -475,6 +483,70 @@ fn advance_subpass_index(
     Ok(Some(next_active_subpass))
 }
 
+fn subpass_target_input_attachment_indices(
+    subpass: &ArcSubpassDescriptor,
+) -> impl Iterator<Item = u32> + '_ {
+    subpass
+        .input_attachments
+        .iter()
+        .map(|input| match input.source {
+            SubpassInputSource::Color { subpass, .. } | SubpassInputSource::Depth { subpass } => {
+                subpass.0
+            }
+        })
+}
+
+fn pipeline_subpass_target_matches_pass(
+    pipeline_subpass_target: &wgt::SubpassTarget,
+    current_subpass_index: Option<u32>,
+    pass_context: &RenderPassContext,
+    subpasses: &[ArcSubpassDescriptor],
+    subpass_dependencies: &[wgt::SubpassDependency],
+) -> bool {
+    let Some(current_subpass_index) = current_subpass_index else {
+        return false;
+    };
+    if current_subpass_index >= subpasses.len() as u32 {
+        return false;
+    }
+    if pipeline_subpass_target.index != current_subpass_index {
+        return false;
+    }
+    if pipeline_subpass_target.color_attachment_formats.as_slice()
+        != pass_context.attachments.colors.as_slice()
+    {
+        return false;
+    }
+    if pipeline_subpass_target.depth_stencil_format != pass_context.attachments.depth_stencil {
+        return false;
+    }
+    if !pipeline_subpass_target
+        .dependencies
+        .iter()
+        .all(|dependency| subpass_dependencies.contains(dependency))
+    {
+        return false;
+    }
+    if pipeline_subpass_target.subpass_descs.len() != subpasses.len() {
+        return false;
+    }
+
+    pipeline_subpass_target
+        .subpass_descs
+        .iter()
+        .zip(subpasses.iter())
+        .all(|(target_desc, subpass)| {
+            target_desc.color_attachment_indices.as_slice()
+                == subpass.color_attachment_indices.as_slice()
+                && target_desc.uses_depth_stencil == subpass.uses_depth_stencil
+                && target_desc
+                    .input_attachment_indices
+                    .iter()
+                    .copied()
+                    .eq(subpass_target_input_attachment_indices(subpass))
+        })
+}
+
 pub type RenderBasePass = BasePass<ArcRenderCommand, RenderPassError>;
 
 /// A pass's [encoder state](https://www.w3.org/TR/webgpu/#encoder-state) and
@@ -500,7 +572,6 @@ pub struct RenderPass {
     depth_stencil_attachment: Option<ResolvedRenderPassDepthStencilAttachment<Arc<TextureView>>>,
     timestamp_writes: Option<ArcPassTimestampWrites>,
     occlusion_query_set: Option<Arc<QuerySet>>,
-    /// TODO(Phase 12): track per-subpass `RenderPassContext` values for pipeline compatibility.
     subpass_count: u32,
     subpasses: Vec<ArcSubpassDescriptor>,
     subpass_dependencies: Vec<wgt::SubpassDependency>,
@@ -761,6 +832,11 @@ struct State<'scope, 'snatch_guard, 'cmd_enc> {
     pipeline: Option<Arc<RenderPipeline>>,
     index: IndexState,
     vertex: VertexState,
+    subpass_count: u32,
+    active_subpass_mask: Option<ActiveSubpassMask>,
+    current_subpass_index: Option<u32>,
+    subpasses: Vec<ArcSubpassDescriptor>,
+    subpass_dependencies: Vec<wgt::SubpassDependency>,
 
     info: RenderPassInfo,
 
@@ -771,6 +847,10 @@ struct State<'scope, 'snatch_guard, 'cmd_enc> {
 }
 
 impl<'scope, 'snatch_guard, 'cmd_enc> State<'scope, 'snatch_guard, 'cmd_enc> {
+    fn current_pass_context(&self) -> &RenderPassContext {
+        self.info.context_for_subpass(self.current_subpass_index)
+    }
+
     fn is_ready(&self, family: DrawCommandFamily) -> Result<(), DrawError> {
         if let Some(pipeline) = self.pipeline.as_ref() {
             self.pass.binder.check_compatibility(pipeline.as_ref())?;
@@ -1078,8 +1158,10 @@ pub enum RenderPassErrorInner {
         "transient attachment size MatchTarget requires at least one persistent color or depth/stencil attachment in the render pass"
     )]
     TransientSizeUnresolvable,
-    #[error("render pass defines {count} transient attachments, but transient attachments are not yet wired for render pass execution")]
-    TransientAttachmentsUnsupported { count: u32 },
+    #[error("{location} uses TRANSIENT usage with LoadOp::Load, but transient attachments only support Clear or DontCare")]
+    TransientAttachmentLoadUnsupported { location: AttachmentErrorLocation },
+    #[error("{location} uses TRANSIENT usage with StoreOp::Store, but transient attachments require StoreOp::Discard")]
+    TransientAttachmentStoreUnsupported { location: AttachmentErrorLocation },
     #[error("render bundles are not supported in subpass mode")]
     RenderBundleInSubpassPass,
     #[error(transparent)]
@@ -1193,7 +1275,8 @@ impl WebGpuError for RenderPassError {
             | RenderPassErrorInner::NextSubpassInLegacyPass
             | RenderPassErrorInner::NextSubpassPastLast { .. }
             | RenderPassErrorInner::TransientSizeUnresolvable
-            | RenderPassErrorInner::TransientAttachmentsUnsupported { .. }
+            | RenderPassErrorInner::TransientAttachmentLoadUnsupported { .. }
+            | RenderPassErrorInner::TransientAttachmentStoreUnsupported { .. }
             | RenderPassErrorInner::RenderBundleInSubpassPass
             | RenderPassErrorInner::PassEnded => ErrorType::Validation,
         }
@@ -1221,6 +1304,7 @@ type AttachmentDataVec<T> = ArrayVec<T, MAX_TOTAL_ATTACHMENTS>;
 
 struct RenderPassInfo {
     context: RenderPassContext,
+    subpass_contexts: Vec<RenderPassContext>,
     /// All render attachments, including depth/stencil
     render_attachments: AttachmentDataVec<RenderAttachment>,
     is_depth_read_only: bool,
@@ -1232,6 +1316,18 @@ struct RenderPassInfo {
 }
 
 impl RenderPassInfo {
+    fn context_for_subpass(&self, subpass_index: Option<u32>) -> &RenderPassContext {
+        let Some(subpass_index) = subpass_index else {
+            return &self.context;
+        };
+        let Ok(subpass_index) = usize::try_from(subpass_index) else {
+            return &self.context;
+        };
+        self.subpass_contexts
+            .get(subpass_index)
+            .unwrap_or(&self.context)
+    }
+
     fn add_pass_texture_init_actions<V>(
         load_op: LoadOp<V>,
         store_op: StoreOp,
@@ -1732,6 +1828,40 @@ impl RenderPassInfo {
             sample_count,
             multiview_mask,
         };
+        let subpass_contexts = subpasses
+            .iter()
+            .map(|subpass| RenderPassContext {
+                attachments: AttachmentData {
+                    colors: subpass
+                        .color_attachment_indices
+                        .iter()
+                        .map(|&attachment_index| {
+                            context.attachments.colors[attachment_index as usize]
+                        })
+                        .collect(),
+                    resolves: subpass
+                        .color_attachment_indices
+                        .iter()
+                        .filter_map(|&attachment_index| {
+                            color_attachments[attachment_index as usize]
+                                .as_ref()
+                                .and_then(|attachment| {
+                                    attachment
+                                        .resolve_target
+                                        .as_ref()
+                                        .map(|resolve| resolve.desc.format)
+                                })
+                        })
+                        .collect(),
+                    depth_stencil: subpass
+                        .uses_depth_stencil
+                        .then_some(context.attachments.depth_stencil)
+                        .flatten(),
+                },
+                sample_count,
+                multiview_mask,
+            })
+            .collect();
 
         let timestamp_writes_hal = if let Some(tw) = timestamp_writes.as_ref() {
             let query_set = &tw.query_set;
@@ -1760,14 +1890,109 @@ impl RenderPassInfo {
             None
         };
 
+        let mut transient_index_by_color_slot = vec![None; color_attachments_hal.len()];
+        let mut next_transient_index = 0u32;
+        for (slot, attachment) in color_attachments_hal.iter().enumerate() {
+            let Some(attachment) = attachment.as_ref() else {
+                continue;
+            };
+            if attachment
+                .target
+                .usage
+                .contains(wgt::TextureUses::TRANSIENT)
+            {
+                transient_index_by_color_slot[slot] = Some(next_transient_index);
+                next_transient_index += 1;
+            }
+        }
+        let depth_transient_index = depth_stencil.as_ref().and_then(|depth_stencil| {
+            if depth_stencil
+                .target
+                .usage
+                .contains(wgt::TextureUses::TRANSIENT)
+            {
+                let index = next_transient_index;
+                next_transient_index += 1;
+                Some(index)
+            } else {
+                None
+            }
+        });
+
+        let mut hal_subpass_color_attachments = Vec::with_capacity(subpasses.len());
+        let mut hal_subpass_persistent_indices = Vec::with_capacity(subpasses.len());
+        let mut hal_subpass_depth_attachments = Vec::with_capacity(subpasses.len());
         let mut hal_subpasses = Vec::with_capacity(subpasses.len());
+
         for subpass in subpasses {
-            hal_subpasses.push(hal::Subpass {
-                color_attachments: &[],
-                color_attachment_indices: &subpass.color_attachment_indices,
-                depth_stencil_attachment: if subpass.uses_depth_stencil {
-                    depth_stencil.as_ref().map(|depth_stencil| {
-                        hal::SubpassDepthStencilAttachment::Persistent(
+            let mut subpass_colors = Vec::with_capacity(subpass.color_attachment_indices.len());
+            let mut persistent_indices = Vec::new();
+
+            for &attachment_slot in &subpass.color_attachment_indices {
+                let Some(attachment) = color_attachments_hal
+                    .get(attachment_slot as usize)
+                    .and_then(|attachment| attachment.as_ref())
+                else {
+                    subpass_colors.push(None);
+                    continue;
+                };
+
+                if let Some(transient_index) =
+                    transient_index_by_color_slot[attachment_slot as usize]
+                {
+                    subpass_colors.push(Some(hal::SubpassColorAttachment::Transient {
+                        transient_index,
+                        ops: transient_ops_from_hal_ops(
+                            attachment.ops,
+                            attachment.clear_value,
+                            AttachmentErrorLocation::Color {
+                                index: attachment_slot as usize,
+                                resolve: false,
+                            },
+                        )?,
+                        clear_value: attachment.clear_value,
+                    }));
+                } else {
+                    subpass_colors.push(Some(hal::SubpassColorAttachment::Persistent(
+                        hal::ColorAttachment {
+                            target: hal::Attachment {
+                                view: attachment.target.view,
+                                usage: attachment.target.usage,
+                            },
+                            depth_slice: attachment.depth_slice,
+                            resolve_target: attachment.resolve_target.as_ref().map(|resolve| {
+                                hal::Attachment {
+                                    view: resolve.view,
+                                    usage: resolve.usage,
+                                }
+                            }),
+                            ops: attachment.ops,
+                            clear_value: attachment.clear_value,
+                        },
+                    )));
+                    persistent_indices.push(attachment_slot);
+                }
+            }
+
+            let depth_attachment = if subpass.uses_depth_stencil {
+                if let Some(depth_stencil) = depth_stencil.as_ref() {
+                    if let Some(transient_index) = depth_transient_index {
+                        Some(hal::SubpassDepthStencilAttachment::Transient {
+                            transient_index,
+                            depth_ops: transient_ops_from_hal_ops(
+                                depth_stencil.depth_ops,
+                                depth_stencil.clear_value.0,
+                                AttachmentErrorLocation::Depth,
+                            )?,
+                            stencil_ops: transient_ops_from_hal_ops(
+                                depth_stencil.stencil_ops,
+                                depth_stencil.clear_value.1,
+                                AttachmentErrorLocation::Depth,
+                            )?,
+                            clear_value: depth_stencil.clear_value,
+                        })
+                    } else {
+                        Some(hal::SubpassDepthStencilAttachment::Persistent(
                             hal::DepthStencilAttachment {
                                 target: hal::Attachment {
                                     view: depth_stencil.target.view,
@@ -1777,11 +2002,24 @@ impl RenderPassInfo {
                                 stencil_ops: depth_stencil.stencil_ops,
                                 clear_value: depth_stencil.clear_value,
                             },
-                        )
-                    })
+                        ))
+                    }
                 } else {
                     None
-                },
+                }
+            } else {
+                None
+            };
+
+            hal_subpass_color_attachments.push(subpass_colors);
+            hal_subpass_persistent_indices.push(persistent_indices);
+            hal_subpass_depth_attachments.push(depth_attachment);
+        }
+        for (index, subpass) in subpasses.iter().enumerate() {
+            hal_subpasses.push(hal::Subpass {
+                color_attachments: &hal_subpass_color_attachments[index],
+                color_attachment_indices: &hal_subpass_persistent_indices[index],
+                depth_stencil_attachment: hal_subpass_depth_attachments[index].take(),
                 input_attachments: &subpass.input_attachments,
             });
         }
@@ -1825,6 +2063,7 @@ impl RenderPassInfo {
 
         Ok(Self {
             context,
+            subpass_contexts,
             render_attachments,
             is_depth_read_only,
             is_stencil_read_only,
@@ -1963,7 +2202,6 @@ impl Global {
                 desc.color_attachments.iter().any(Option::is_some)
                     || desc.depth_stencil_attachment.is_some(),
             )?;
-            validate_transient_attachment_wiring(&desc.transient_attachments)?;
             arc_desc.subpasses = desc
                 .subpasses
                 .iter()
@@ -1978,7 +2216,7 @@ impl Global {
             arc_desc.subpass_count = arc_desc.subpasses.len() as u32;
             arc_desc.active_subpass_mask = desc.active_subpass_mask;
 
-            for color_attachment in desc.color_attachments.iter() {
+            for (color_index, color_attachment) in desc.color_attachments.iter().enumerate() {
                 if let Some(RenderPassColorAttachment {
                     view: view_id,
                     depth_slice,
@@ -1990,16 +2228,24 @@ impl Global {
                     let view = texture_views.get(*view_id).get()?;
                     view.same_device(device)?;
 
-                    if view.desc.usage.contains(TextureUsages::TRANSIENT)
-                        && *store_op != StoreOp::Discard
-                    {
-                        return Err(RenderPassErrorInner::ColorAttachment(
-                            ColorAttachmentError::InvalidUsageForStoreOp(
-                                TextureUsages::TRANSIENT,
-                                StoreOp::Discard,
-                                *store_op,
-                            ),
-                        ));
+                    if view.desc.usage.contains(TextureUsages::TRANSIENT) {
+                        if *store_op != StoreOp::Discard {
+                            return Err(RenderPassErrorInner::ColorAttachment(
+                                ColorAttachmentError::InvalidUsageForStoreOp(
+                                    TextureUsages::TRANSIENT,
+                                    StoreOp::Discard,
+                                    *store_op,
+                                ),
+                            ));
+                        }
+                        if *load_op == LoadOp::Load {
+                            return Err(RenderPassErrorInner::TransientAttachmentLoadUnsupported {
+                                location: AttachmentErrorLocation::Color {
+                                    index: color_index,
+                                    resolve: false,
+                                },
+                            });
+                        }
                     }
 
                     let resolve_target = if let Some(resolve_target_id) = resolve_target {
@@ -2038,7 +2284,7 @@ impl Global {
                         )));
                     }
 
-                    Some(ResolvedRenderPassDepthStencilAttachment {
+                    let resolved = ResolvedRenderPassDepthStencilAttachment {
                         view,
                         depth: if format.has_depth_aspect() {
                             depth_stencil_attachment.depth.resolve(|clear| if let Some(clear) = clear {
@@ -2059,7 +2305,36 @@ impl Global {
                         } else {
                             ResolvedPassChannel::ReadOnly
                         },
-                    })
+                    };
+
+                    if resolved.view.desc.usage.contains(TextureUsages::TRANSIENT) {
+                        if format.has_depth_aspect() {
+                            if resolved.depth.store_op() != StoreOp::Discard {
+                                return Err(RenderPassErrorInner::TransientAttachmentStoreUnsupported {
+                                    location: AttachmentErrorLocation::Depth,
+                                });
+                            }
+                            if resolved.depth.load_op() == LoadOp::Load {
+                                return Err(RenderPassErrorInner::TransientAttachmentLoadUnsupported {
+                                    location: AttachmentErrorLocation::Depth,
+                                });
+                            }
+                        }
+                        if format.has_stencil_aspect() {
+                            if resolved.stencil.store_op() != StoreOp::Discard {
+                                return Err(RenderPassErrorInner::TransientAttachmentStoreUnsupported {
+                                    location: AttachmentErrorLocation::Depth,
+                                });
+                            }
+                            if resolved.stencil.load_op() == LoadOp::Load {
+                                return Err(RenderPassErrorInner::TransientAttachmentLoadUnsupported {
+                                    location: AttachmentErrorLocation::Depth,
+                                });
+                            }
+                        }
+                    }
+
+                    Some(resolved)
                 } else {
                     None
                 };
@@ -2238,6 +2513,8 @@ pub(super) fn encode_render_pass(
         transient_memory_hint,
         active_subpass_mask,
     } = subpass_data;
+    let subpass_count = subpasses.len() as u32;
+    let current_subpass_index = first_active_subpass_index(subpass_count, active_subpass_mask);
 
     let pass_scope = PassErrorScope::Pass;
 
@@ -2303,6 +2580,11 @@ pub(super) fn encode_render_pass(
             pipeline: None,
             index: IndexState::default(),
             vertex: VertexState::default(),
+            subpass_count,
+            active_subpass_mask,
+            current_subpass_index,
+            subpasses,
+            subpass_dependencies,
 
             info,
 
@@ -2600,9 +2882,18 @@ pub(super) fn encode_render_pass(
                     )
                     .map_pass_err(scope)?;
                 }
-                ArcRenderCommand::NextSubpass => unsafe {
-                    state.pass.base.raw_encoder.next_subpass();
-                },
+                ArcRenderCommand::NextSubpass => {
+                    let scope = PassErrorScope::NextSubpass;
+                    state.current_subpass_index = advance_subpass_index(
+                        state.current_subpass_index,
+                        state.subpass_count,
+                        state.active_subpass_mask,
+                    )
+                    .map_pass_err(scope)?;
+                    unsafe {
+                        state.pass.base.raw_encoder.next_subpass();
+                    }
+                }
                 ArcRenderCommand::ExecuteBundle(bundle) => {
                     let scope = PassErrorScope::ExecuteBundle;
                     execute_bundle(
@@ -2721,9 +3012,22 @@ fn set_pipeline(
 
     pipeline.same_device(device)?;
 
+    if let Some(subpass_target) = pipeline.subpass_target.as_ref() {
+        if !pipeline_subpass_target_matches_pass(
+            subpass_target,
+            state.current_subpass_index,
+            &state.info.context,
+            &state.subpasses,
+            &state.subpass_dependencies,
+        ) {
+            return Err(
+                RenderCommandError::IncompatibleSubpassTarget(pipeline.error_ident()).into(),
+            );
+        }
+    }
+
     state
-        .info
-        .context
+        .current_pass_context()
         .check_compatible(&pipeline.pass_context, pipeline.as_ref())
         .map_err(RenderCommandError::IncompatiblePipelineTargets)?;
 
@@ -4248,17 +4552,21 @@ pub(crate) const fn get_stride_of_indirect_args(family: DrawCommandFamily) -> u6
 mod tests {
     use alloc::{borrow::Cow, vec};
 
+    use arrayvec::ArrayVec;
+
     use super::{
-        advance_subpass_index, validate_bundle_execution_support, validate_subpass_feature,
-        validate_subpasses, validate_transient_attachment_sizes,
-        validate_transient_attachment_wiring, RenderPassError, RenderPassErrorInner,
-        SubpassDescriptor,
+        advance_subpass_index, pipeline_subpass_target_matches_pass,
+        validate_bundle_execution_support, validate_subpass_feature, validate_subpasses,
+        validate_transient_attachment_sizes, ArcSubpassDescriptor, RenderPassError,
+        RenderPassErrorInner, SubpassDescriptor,
     };
     use crate::command::PassErrorScope;
+    use crate::device::{AttachmentData, RenderPassContext};
     use wgt::{
         error::{ErrorType, WebGpuError},
-        ActiveSubpassMask, SubpassIndex, SubpassInputAttachment, SubpassInputSource, TextureFormat,
-        TransientAttachmentDescriptor, TransientSize,
+        ActiveSubpassMask, SubpassDependency, SubpassDependencyType, SubpassIndex,
+        SubpassInputAttachment, SubpassInputSource, SubpassTarget, SubpassTargetDesc,
+        TextureFormat, TransientAttachmentDescriptor, TransientSize,
     };
 
     #[test]
@@ -4397,21 +4705,50 @@ mod tests {
     }
 
     #[test]
-    fn validate_transient_attachment_wiring_rejects_non_empty_list() {
-        let transient_attachments = [TransientAttachmentDescriptor {
-            format: TextureFormat::Rgba8Unorm,
-            size: TransientSize::Explicit {
-                width: 4,
-                height: 4,
-            },
-            sample_count: 1,
-        }];
-        let error = validate_transient_attachment_wiring(&transient_attachments).unwrap_err();
+    fn transient_ops_reject_store_for_transient_attachment() {
+        let error = super::transient_ops_from_hal_ops(
+            hal::AttachmentOps::STORE,
+            7u32,
+            super::AttachmentErrorLocation::Depth,
+        )
+        .unwrap_err();
         assert!(matches!(
             error,
-            RenderPassErrorInner::TransientAttachmentsUnsupported { count: 1 }
+            RenderPassErrorInner::TransientAttachmentStoreUnsupported { .. }
         ));
-        assert!(validate_transient_attachment_wiring(&[]).is_ok());
+    }
+
+    #[test]
+    fn transient_ops_reject_load_for_transient_attachment() {
+        let error = super::transient_ops_from_hal_ops(
+            hal::AttachmentOps::LOAD | hal::AttachmentOps::STORE_DISCARD,
+            7u32,
+            super::AttachmentErrorLocation::Depth,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            RenderPassErrorInner::TransientAttachmentLoadUnsupported { .. }
+        ));
+    }
+
+    #[test]
+    fn transient_ops_allow_clear_or_dont_care_load() {
+        let clear_ops = super::transient_ops_from_hal_ops(
+            hal::AttachmentOps::LOAD_CLEAR | hal::AttachmentOps::STORE_DISCARD,
+            7u32,
+            super::AttachmentErrorLocation::Depth,
+        )
+        .unwrap();
+        assert!(matches!(clear_ops.load, wgt::TransientLoadOp::Clear(7)));
+
+        let dont_care_ops = super::transient_ops_from_hal_ops(
+            hal::AttachmentOps::LOAD_DONT_CARE | hal::AttachmentOps::STORE_DISCARD,
+            7u32,
+            super::AttachmentErrorLocation::Depth,
+        )
+        .unwrap();
+        assert!(matches!(dont_care_ops.load, wgt::TransientLoadOp::DontCare));
     }
 
     #[test]
@@ -4422,6 +4759,190 @@ mod tests {
             RenderPassErrorInner::RenderBundleInSubpassPass
         ));
         assert!(validate_bundle_execution_support(0).is_ok());
+    }
+
+    #[test]
+    fn pipeline_subpass_target_match_accepts_matching_target() {
+        let subpasses = vec![
+            ArcSubpassDescriptor {
+                color_attachment_indices: vec![0],
+                uses_depth_stencil: true,
+                input_attachments: vec![],
+            },
+            ArcSubpassDescriptor {
+                color_attachment_indices: vec![1],
+                uses_depth_stencil: true,
+                input_attachments: vec![SubpassInputAttachment {
+                    binding: 0,
+                    source: SubpassInputSource::Color {
+                        subpass: SubpassIndex(0),
+                        attachment_index: 0,
+                    },
+                }],
+            },
+        ];
+        let dependencies = vec![SubpassDependency {
+            src_subpass: SubpassIndex(0),
+            dst_subpass: SubpassIndex(1),
+            dependency_type: SubpassDependencyType::ColorToInput,
+            by_region: true,
+        }];
+        let pass_context = RenderPassContext {
+            attachments: AttachmentData {
+                colors: [
+                    Some(TextureFormat::Rgba8Unorm),
+                    Some(TextureFormat::Rgba16Float),
+                ]
+                .into_iter()
+                .collect(),
+                resolves: ArrayVec::new(),
+                depth_stencil: Some(TextureFormat::Depth32Float),
+            },
+            sample_count: 1,
+            multiview_mask: None,
+        };
+        let target = SubpassTarget {
+            index: 1,
+            color_attachment_formats: vec![
+                Some(TextureFormat::Rgba8Unorm),
+                Some(TextureFormat::Rgba16Float),
+            ],
+            depth_stencil_format: Some(TextureFormat::Depth32Float),
+            subpass_descs: vec![
+                SubpassTargetDesc {
+                    color_attachment_indices: vec![0],
+                    uses_depth_stencil: true,
+                    input_attachment_indices: vec![],
+                },
+                SubpassTargetDesc {
+                    color_attachment_indices: vec![1],
+                    uses_depth_stencil: true,
+                    input_attachment_indices: vec![0],
+                },
+            ],
+            dependencies,
+        };
+
+        assert!(pipeline_subpass_target_matches_pass(
+            &target,
+            Some(1),
+            &pass_context,
+            &subpasses,
+            &target.dependencies,
+        ));
+    }
+
+    #[test]
+    fn pipeline_subpass_target_match_rejects_mismatched_index() {
+        let subpasses = vec![ArcSubpassDescriptor::default()];
+        let pass_context = RenderPassContext {
+            attachments: AttachmentData {
+                colors: [Some(TextureFormat::Rgba8Unorm)].into_iter().collect(),
+                resolves: ArrayVec::new(),
+                depth_stencil: None,
+            },
+            sample_count: 1,
+            multiview_mask: None,
+        };
+        let target = SubpassTarget {
+            index: 1,
+            color_attachment_formats: vec![Some(TextureFormat::Rgba8Unorm)],
+            depth_stencil_format: None,
+            subpass_descs: vec![SubpassTargetDesc::default()],
+            dependencies: vec![],
+        };
+
+        assert!(!pipeline_subpass_target_matches_pass(
+            &target,
+            Some(0),
+            &pass_context,
+            &subpasses,
+            &[],
+        ));
+    }
+
+    #[test]
+    fn pipeline_subpass_target_match_accepts_dependency_superset_ordering() {
+        let subpasses = vec![
+            ArcSubpassDescriptor {
+                color_attachment_indices: vec![0],
+                uses_depth_stencil: false,
+                input_attachments: vec![],
+            },
+            ArcSubpassDescriptor {
+                color_attachment_indices: vec![1],
+                uses_depth_stencil: false,
+                input_attachments: vec![SubpassInputAttachment {
+                    binding: 0,
+                    source: SubpassInputSource::Color {
+                        subpass: SubpassIndex(0),
+                        attachment_index: 0,
+                    },
+                }],
+            },
+        ];
+        let pass_dependencies = vec![
+            SubpassDependency {
+                src_subpass: SubpassIndex(0),
+                dst_subpass: SubpassIndex(1),
+                dependency_type: SubpassDependencyType::ColorToInput,
+                by_region: true,
+            },
+            SubpassDependency {
+                src_subpass: SubpassIndex(0),
+                dst_subpass: SubpassIndex(1),
+                dependency_type: SubpassDependencyType::ColorDepthToInput,
+                by_region: true,
+            },
+        ];
+        let pass_context = RenderPassContext {
+            attachments: AttachmentData {
+                colors: [
+                    Some(TextureFormat::Rgba8Unorm),
+                    Some(TextureFormat::Rgba16Float),
+                ]
+                .into_iter()
+                .collect(),
+                resolves: ArrayVec::new(),
+                depth_stencil: None,
+            },
+            sample_count: 1,
+            multiview_mask: None,
+        };
+        let target = SubpassTarget {
+            index: 1,
+            color_attachment_formats: vec![
+                Some(TextureFormat::Rgba8Unorm),
+                Some(TextureFormat::Rgba16Float),
+            ],
+            depth_stencil_format: None,
+            subpass_descs: vec![
+                SubpassTargetDesc {
+                    color_attachment_indices: vec![0],
+                    uses_depth_stencil: false,
+                    input_attachment_indices: vec![],
+                },
+                SubpassTargetDesc {
+                    color_attachment_indices: vec![1],
+                    uses_depth_stencil: false,
+                    input_attachment_indices: vec![0],
+                },
+            ],
+            dependencies: vec![SubpassDependency {
+                src_subpass: SubpassIndex(0),
+                dst_subpass: SubpassIndex(1),
+                dependency_type: SubpassDependencyType::ColorToInput,
+                by_region: true,
+            }],
+        };
+
+        assert!(pipeline_subpass_target_matches_pass(
+            &target,
+            Some(1),
+            &pass_context,
+            &subpasses,
+            &pass_dependencies,
+        ));
     }
 
     #[test]

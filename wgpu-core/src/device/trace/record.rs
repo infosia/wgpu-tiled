@@ -737,6 +737,7 @@ impl<'a> IntoTrace for crate::pipeline::ResolvedGeneralRenderPipelineDescriptor<
             multisample: self.multisample,
             fragment: self.fragment.map(|f| f.into_trace()),
             multiview_mask: self.multiview_mask,
+            subpass_target: self.subpass_target,
             cache: self.cache.map(|c| c.into_trace()),
         }
     }

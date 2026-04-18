@@ -57,6 +57,7 @@ static OCCLUSION_QUERY: GpuTestConfiguration = GpuTestConfiguration::new()
                 }),
                 multisample: wgpu::MultisampleState::default(),
                 multiview_mask: None,
+                subpass_target: None,
                 cache: None,
             });
 

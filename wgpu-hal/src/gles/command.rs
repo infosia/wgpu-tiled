@@ -1,4 +1,4 @@
-use alloc::string::String;
+use alloc::{string::String, vec::Vec};
 use core::{mem, ops::Range};
 
 use arrayvec::ArrayVec;
@@ -35,6 +35,28 @@ struct TextureSlotDesc {
     sampler_index: Option<u8>,
 }
 
+#[derive(Clone, Debug)]
+struct SubpassColorBinding {
+    view: super::TextureView,
+    depth_slice: Option<u32>,
+    store_discard: bool,
+}
+
+#[derive(Clone, Debug)]
+struct SubpassDepthStencilBinding {
+    view: super::TextureView,
+    aspects: crate::FormatAspects,
+    depth_store_discard: bool,
+    stencil_store_discard: bool,
+}
+
+#[derive(Clone, Debug, Default)]
+struct SubpassRecording {
+    color_attachments: Vec<Option<SubpassColorBinding>>,
+    depth_stencil_attachment: Option<SubpassDepthStencilBinding>,
+    input_attachments: Vec<wgt::SubpassInputAttachment>,
+}
+
 pub(super) struct State {
     topology: u32,
     primitive: super::PrimitiveState,
@@ -65,6 +87,8 @@ pub(super) struct State {
     active_subpass_index: Option<u32>,
     subpass_count: u32,
     active_subpass_mask: Option<wgt::ActiveSubpassMask>,
+    tier_b_subpass_fallback: bool,
+    subpasses: Vec<SubpassRecording>,
 }
 
 impl Default for State {
@@ -97,6 +121,8 @@ impl Default for State {
             active_subpass_index: Default::default(),
             subpass_count: Default::default(),
             active_subpass_mask: Default::default(),
+            tier_b_subpass_fallback: Default::default(),
+            subpasses: Default::default(),
         }
     }
 }
@@ -284,6 +310,160 @@ impl super::CommandEncoder {
         if dirty_textures != 0 {
             self.rebind_sampler_states(dirty_textures, 0);
         }
+    }
+
+    fn encode_tier_b_subpass_attachments(
+        &mut self,
+        subpass_index: u32,
+    ) -> Result<(), crate::DeviceError> {
+        let Some(subpass) = self.state.subpasses.get(subpass_index as usize).cloned() else {
+            log::error!("gles: tier-b subpass index {subpass_index} out of range");
+            return Err(crate::DeviceError::Unexpected);
+        };
+
+        self.cmd_buffer
+            .commands
+            .push(C::ResetFramebuffer { is_default: false });
+
+        let mut invalidate_attachments =
+            ArrayVec::<u32, { crate::MAX_COLOR_ATTACHMENTS + 2 }>::new();
+        for (index, color_attachment) in subpass.color_attachments.iter().enumerate() {
+            let attachment = glow::COLOR_ATTACHMENT0 + index as u32;
+            if let Some(color_attachment) = color_attachment {
+                self.cmd_buffer.commands.push(C::BindAttachment {
+                    attachment,
+                    view: color_attachment.view.clone(),
+                    depth_slice: color_attachment.depth_slice,
+                    sample_count: 1,
+                });
+                if color_attachment.store_discard {
+                    invalidate_attachments.push(attachment);
+                }
+            }
+        }
+
+        if let Some(depth_stencil) = subpass.depth_stencil_attachment {
+            let attachment = match depth_stencil.aspects {
+                crate::FormatAspects::DEPTH => glow::DEPTH_ATTACHMENT,
+                crate::FormatAspects::STENCIL => glow::STENCIL_ATTACHMENT,
+                _ => glow::DEPTH_STENCIL_ATTACHMENT,
+            };
+            self.cmd_buffer.commands.push(C::BindAttachment {
+                attachment,
+                view: depth_stencil.view,
+                depth_slice: None,
+                sample_count: 1,
+            });
+            if depth_stencil.depth_store_discard {
+                invalidate_attachments.push(glow::DEPTH_ATTACHMENT);
+            }
+            if depth_stencil.stencil_store_discard {
+                invalidate_attachments.push(glow::STENCIL_ATTACHMENT);
+            }
+        }
+
+        self.cmd_buffer
+            .commands
+            .push(C::SetDrawColorBuffers(subpass.color_attachments.len() as u8));
+        self.state.invalidate_attachments = invalidate_attachments;
+        Ok(())
+    }
+
+    fn bind_tier_b_subpass_input_attachments(
+        &mut self,
+        subpass_index: u32,
+    ) -> Result<(), crate::DeviceError> {
+        let Some(subpass) = self.state.subpasses.get(subpass_index as usize).cloned() else {
+            log::error!("gles: tier-b subpass index {subpass_index} out of range");
+            return Err(crate::DeviceError::Unexpected);
+        };
+        if subpass.input_attachments.is_empty() {
+            return Ok(());
+        }
+
+        let mut textures_to_bind = Vec::with_capacity(subpass.input_attachments.len());
+        for input_attachment in subpass.input_attachments {
+            if input_attachment.binding as usize >= self.state.texture_slots.len()
+                || input_attachment.binding >= 32
+            {
+                log::error!(
+                    "gles: tier-b input attachment binding {} is out of range",
+                    input_attachment.binding
+                );
+                return Err(crate::DeviceError::Unexpected);
+            }
+            let source_view = match input_attachment.source {
+                wgt::SubpassInputSource::Color {
+                    subpass,
+                    attachment_index,
+                } => {
+                    let source_subpass =
+                        self.state
+                            .subpasses
+                            .get(subpass.0 as usize)
+                            .ok_or_else(|| {
+                                log::error!(
+                                    "gles: tier-b color input source subpass {} is out of range",
+                                    subpass.0
+                                );
+                                crate::DeviceError::Unexpected
+                            })?;
+                    source_subpass
+                        .color_attachments
+                        .get(attachment_index as usize)
+                        .and_then(|attachment| attachment.as_ref())
+                        .map(|attachment| attachment.view.clone())
+                        .ok_or_else(|| {
+                            log::error!(
+                                "gles: tier-b color input source attachment {} is unavailable in subpass {}",
+                                attachment_index,
+                                subpass.0
+                            );
+                            crate::DeviceError::Unexpected
+                        })?
+                }
+                wgt::SubpassInputSource::Depth { subpass } => self
+                    .state
+                    .subpasses
+                    .get(subpass.0 as usize)
+                    .and_then(|source_subpass| source_subpass.depth_stencil_attachment.as_ref())
+                    .map(|attachment| attachment.view.clone())
+                    .ok_or_else(|| {
+                        log::error!(
+                            "gles: tier-b depth input source is unavailable in subpass {}",
+                            subpass.0
+                        );
+                        crate::DeviceError::Unexpected
+                    })?,
+            };
+
+            let (raw, target) = match source_view.inner {
+                super::TextureInner::Texture { raw, target } => (raw, target),
+                _ => {
+                    log::error!(
+                        "gles: tier-b input attachment binding {} requires a texture source",
+                        input_attachment.binding
+                    );
+                    return Err(crate::DeviceError::Unexpected);
+                }
+            };
+            textures_to_bind.push((input_attachment.binding, raw, target, source_view));
+        }
+
+        let mut dirty_textures = 0u32;
+        for (slot, raw, target, source_view) in textures_to_bind {
+            dirty_textures |= 1 << slot;
+            self.state.texture_slots[slot as usize].tex_target = target;
+            self.cmd_buffer.commands.push(C::BindTexture {
+                slot,
+                texture: raw,
+                target,
+                aspects: source_view.aspects,
+                mip_levels: source_view.mip_levels.clone(),
+            });
+        }
+        self.rebind_sampler_states(dirty_textures, 0);
+        Ok(())
     }
 }
 
@@ -549,6 +729,11 @@ impl crate::CommandEncoder for super::CommandEncoder {
         self.state.render_size = desc.extent;
         self.state.resolve_attachments.clear();
         self.state.invalidate_attachments.clear();
+        self.state.subpasses.clear();
+        self.state.tier_b_subpass_fallback = self.state.subpass_count > 0
+            && !self
+                .private_caps
+                .contains(super::PrivateCapabilities::SHADER_FRAMEBUFFER_FETCH);
         if let Some(label) = desc.label {
             let range = self.cmd_buffer.add_marker(label);
             self.cmd_buffer.commands.push(C::PushDebugGroup(range));
@@ -570,9 +755,62 @@ impl crate::CommandEncoder for super::CommandEncoder {
         if rendering_to_external_framebuffer && desc.color_attachments.len() != 1 {
             panic!("Multiple render attachments with external framebuffers are not supported.");
         }
+        if self.state.tier_b_subpass_fallback && rendering_to_external_framebuffer {
+            log::error!("gles: tier-b subpass fallback does not support external framebuffers");
+            return Err(crate::DeviceError::Unexpected);
+        }
 
         // `COLOR_ATTACHMENT0` to `COLOR_ATTACHMENT31` gives 32 possible color attachments.
         assert!(desc.color_attachments.len() <= 32);
+
+        let mut transient_color_by_index = Vec::new();
+        let mut transient_depth_by_index = Vec::new();
+        if self.state.tier_b_subpass_fallback {
+            let mut next_transient_index = 0usize;
+            for cat in desc
+                .color_attachments
+                .iter()
+                .filter_map(|attachment| attachment.as_ref())
+            {
+                if cat.target.usage.contains(wgt::TextureUses::TRANSIENT) {
+                    if transient_color_by_index.len() <= next_transient_index {
+                        transient_color_by_index.resize(next_transient_index + 1, None);
+                    }
+                    transient_color_by_index[next_transient_index] = Some(SubpassColorBinding {
+                        view: cat.target.view.clone(),
+                        depth_slice: cat.depth_slice,
+                        store_discard: cat.ops.contains(crate::AttachmentOps::STORE_DISCARD),
+                    });
+                    next_transient_index += 1;
+                }
+                if cat.resolve_target.is_some() {
+                    log::error!("gles: tier-b subpass fallback does not support resolve targets");
+                    return Err(crate::DeviceError::Unexpected);
+                }
+            }
+            if let Some(depth_stencil) = desc.depth_stencil_attachment.as_ref() {
+                if depth_stencil
+                    .target
+                    .usage
+                    .contains(wgt::TextureUses::TRANSIENT)
+                {
+                    if transient_depth_by_index.len() <= next_transient_index {
+                        transient_depth_by_index.resize(next_transient_index + 1, None);
+                    }
+                    transient_depth_by_index[next_transient_index] =
+                        Some(SubpassDepthStencilBinding {
+                            view: depth_stencil.target.view.clone(),
+                            aspects: depth_stencil.target.view.aspects,
+                            depth_store_discard: depth_stencil
+                                .depth_ops
+                                .contains(crate::AttachmentOps::STORE_DISCARD),
+                            stencil_store_discard: depth_stencil
+                                .stencil_ops
+                                .contains(crate::AttachmentOps::STORE_DISCARD),
+                        });
+                }
+            }
+        }
 
         match desc
             .color_attachments
@@ -625,7 +863,9 @@ impl crate::CommandEncoder for super::CommandEncoder {
                                 .resolve_attachments
                                 .push((attachment, rat.view.clone()));
                         }
-                        if cat.ops.contains(crate::AttachmentOps::STORE_DISCARD) {
+                        if !self.state.tier_b_subpass_fallback
+                            && cat.ops.contains(crate::AttachmentOps::STORE_DISCARD)
+                        {
                             self.state.invalidate_attachments.push(attachment);
                         }
                     }
@@ -643,14 +883,16 @@ impl crate::CommandEncoder for super::CommandEncoder {
                         depth_slice: None,
                         sample_count: 1,
                     });
-                    if aspects.contains(crate::FormatAspects::DEPTH)
+                    if !self.state.tier_b_subpass_fallback
+                        && aspects.contains(crate::FormatAspects::DEPTH)
                         && dsat.depth_ops.contains(crate::AttachmentOps::STORE_DISCARD)
                     {
                         self.state
                             .invalidate_attachments
                             .push(glow::DEPTH_ATTACHMENT);
                     }
-                    if aspects.contains(crate::FormatAspects::STENCIL)
+                    if !self.state.tier_b_subpass_fallback
+                        && aspects.contains(crate::FormatAspects::STENCIL)
                         && dsat
                             .stencil_ops
                             .contains(crate::AttachmentOps::STORE_DISCARD)
@@ -731,6 +973,105 @@ impl crate::CommandEncoder for super::CommandEncoder {
                     .push(C::ClearStencil(dsat.clear_value.1));
             }
         }
+
+        if self.state.tier_b_subpass_fallback {
+            self.state.subpasses.reserve(desc.subpasses.len());
+            for subpass in desc.subpasses {
+                let mut color_attachments = Vec::new();
+                if !subpass.color_attachments.is_empty() {
+                    let mut persistent_index_iter =
+                        subpass.color_attachment_indices.iter().copied();
+                    for color_attachment in subpass.color_attachments {
+                        let resolved = match color_attachment.as_ref() {
+                            Some(crate::SubpassColorAttachment::Persistent(color_attachment)) => {
+                                let attachment_slot =
+                                    persistent_index_iter.next().ok_or_else(|| {
+                                        log::error!(
+                                            "gles: missing persistent color attachment index"
+                                        );
+                                        crate::DeviceError::Unexpected
+                                    })?;
+                                let top_level = desc
+                                    .color_attachments
+                                    .get(attachment_slot as usize)
+                                    .and_then(|attachment| attachment.as_ref())
+                                    .ok_or_else(|| {
+                                        log::error!(
+                                            "gles: persistent color attachment slot {} is unavailable",
+                                            attachment_slot
+                                        );
+                                        crate::DeviceError::Unexpected
+                                    })?;
+                                Some(SubpassColorBinding {
+                                    view: top_level.target.view.clone(),
+                                    depth_slice: color_attachment.depth_slice,
+                                    store_discard: color_attachment
+                                        .ops
+                                        .contains(crate::AttachmentOps::STORE_DISCARD),
+                                })
+                            }
+                            Some(crate::SubpassColorAttachment::Transient {
+                                transient_index,
+                                ..
+                            }) => transient_color_by_index
+                                .get(*transient_index as usize)
+                                .and_then(|attachment| attachment.as_ref())
+                                .cloned(),
+                            None => None,
+                        };
+                        color_attachments.push(resolved);
+                    }
+                } else {
+                    for &attachment_slot in subpass.color_attachment_indices {
+                        color_attachments.push(
+                            desc.color_attachments
+                                .get(attachment_slot as usize)
+                                .and_then(|attachment| attachment.as_ref())
+                                .map(|attachment| SubpassColorBinding {
+                                    view: attachment.target.view.clone(),
+                                    depth_slice: attachment.depth_slice,
+                                    store_discard: attachment
+                                        .ops
+                                        .contains(crate::AttachmentOps::STORE_DISCARD),
+                                }),
+                        );
+                    }
+                }
+
+                let depth_stencil_attachment = match subpass.depth_stencil_attachment.as_ref() {
+                    Some(crate::SubpassDepthStencilAttachment::Persistent(depth_stencil)) => {
+                        Some(SubpassDepthStencilBinding {
+                            view: depth_stencil.target.view.clone(),
+                            aspects: depth_stencil.target.view.aspects,
+                            depth_store_discard: depth_stencil
+                                .depth_ops
+                                .contains(crate::AttachmentOps::STORE_DISCARD),
+                            stencil_store_discard: depth_stencil
+                                .stencil_ops
+                                .contains(crate::AttachmentOps::STORE_DISCARD),
+                        })
+                    }
+                    Some(crate::SubpassDepthStencilAttachment::Transient {
+                        transient_index,
+                        ..
+                    }) => transient_depth_by_index
+                        .get(*transient_index as usize)
+                        .and_then(|attachment| attachment.as_ref())
+                        .cloned(),
+                    None => None,
+                };
+
+                self.state.subpasses.push(SubpassRecording {
+                    color_attachments,
+                    depth_stencil_attachment,
+                    input_attachments: subpass.input_attachments.to_vec(),
+                });
+            }
+
+            if let Some(active_subpass_index) = self.state.active_subpass_index {
+                self.encode_tier_b_subpass_attachments(active_subpass_index)?;
+            }
+        }
         Ok(())
     }
     unsafe fn end_render_pass(&mut self) {
@@ -757,6 +1098,8 @@ impl crate::CommandEncoder for super::CommandEncoder {
         self.state.active_subpass_index = None;
         self.state.subpass_count = 0;
         self.state.active_subpass_mask = None;
+        self.state.tier_b_subpass_fallback = false;
+        self.state.subpasses.clear();
         self.state.color_targets.clear();
         for vat in &self.state.vertex_attributes {
             self.cmd_buffer
@@ -777,6 +1120,12 @@ impl crate::CommandEncoder for super::CommandEncoder {
         let Some(current_subpass) = self.state.active_subpass_index else {
             return;
         };
+        if self.state.tier_b_subpass_fallback && !self.state.invalidate_attachments.is_empty() {
+            self.cmd_buffer.commands.push(C::InvalidateAttachments(
+                self.state.invalidate_attachments.clone(),
+            ));
+            self.state.invalidate_attachments.clear();
+        }
         let next_subpass = next_active_subpass_index(
             current_subpass,
             self.state.subpass_count,
@@ -785,6 +1134,13 @@ impl crate::CommandEncoder for super::CommandEncoder {
         debug_assert!(next_subpass <= self.state.subpass_count);
         self.state.active_subpass_index =
             (next_subpass < self.state.subpass_count).then_some(next_subpass);
+        if self.state.tier_b_subpass_fallback {
+            if let Some(active_subpass_index) = self.state.active_subpass_index {
+                if let Err(error) = self.encode_tier_b_subpass_attachments(active_subpass_index) {
+                    log::error!("gles: failed to encode tier-b subpass attachments: {error:?}");
+                }
+            }
+        }
     }
     unsafe fn dispatch_transient(&mut self, _dispatch: &super::TransientDispatch) {
         unreachable!()
@@ -1072,6 +1428,15 @@ impl crate::CommandEncoder for super::CommandEncoder {
                 new_count: pipeline.inner.clip_distance_count,
             });
             self.state.clip_distance_count = pipeline.inner.clip_distance_count;
+        }
+
+        if self.state.tier_b_subpass_fallback {
+            if let Some(active_subpass_index) = self.state.active_subpass_index {
+                if let Err(error) = self.bind_tier_b_subpass_input_attachments(active_subpass_index)
+                {
+                    log::error!("gles: failed to bind tier-b input attachments: {error:?}");
+                }
+            }
         }
     }
 

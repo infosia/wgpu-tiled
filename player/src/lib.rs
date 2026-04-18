@@ -734,6 +734,7 @@ impl Player {
             multisample: desc.multisample,
             fragment,
             multiview_mask: desc.multiview_mask,
+            subpass_target: desc.subpass_target,
             cache: desc.cache.map(|id| self.resolve_pipeline_cache_id(id)),
         }
     }

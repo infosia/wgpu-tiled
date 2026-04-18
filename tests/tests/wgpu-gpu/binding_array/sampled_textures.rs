@@ -220,8 +220,9 @@ async fn binding_array_sampled_textures(ctx: TestingContext, partially_bound: bo
             primitive: PrimitiveState::default(),
             depth_stencil: None,
             multisample: MultisampleState::default(),
-            cache: None,
             multiview_mask: None,
+            subpass_target: None,
+            cache: None,
         });
 
     let mut encoder = ctx

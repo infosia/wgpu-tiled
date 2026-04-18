@@ -653,6 +653,7 @@ var tex: texture_external;
             })],
         }),
         multiview_mask: None,
+        subpass_target: None,
         cache: None,
     });
 

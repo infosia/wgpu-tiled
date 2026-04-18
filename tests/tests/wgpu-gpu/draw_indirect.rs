@@ -208,6 +208,7 @@ async fn run_test(ctx: TestingContext, test_data: TestData, expect_noop: bool) {
             })],
         }),
         multiview_mask: None,
+        subpass_target: None,
         cache: None,
     };
     let pipeline = ctx.device.create_render_pipeline(&pipeline_desc);
@@ -700,6 +701,7 @@ async fn indirect_buffer_offsets(ctx: TestingContext) {
             })],
         }),
         multiview_mask: None,
+        subpass_target: None,
         cache: None,
     };
     let pipeline = ctx.device.create_render_pipeline(&pipeline_desc);

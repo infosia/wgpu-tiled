@@ -50,6 +50,7 @@ fn test_planar_texture_creation_sampling(
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
+            subpass_target: None,
             cache: None,
         });
 
@@ -147,6 +148,7 @@ fn test_planar_texture_rendering(
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
+            subpass_target: None,
             cache: None,
         });
 
@@ -175,6 +177,7 @@ fn test_planar_texture_rendering(
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
+            subpass_target: None,
             cache: None,
         });
 

@@ -45,6 +45,12 @@ const EXAMPLES: &[ExampleDesc] = &[
         webgpu: true,
     },
     ExampleDesc {
+        name: "deferred_rendering",
+        function: wgpu_examples::deferred_rendering::main,
+        webgl: false,  // Multi-subpass extension only
+        webgpu: false, // Multi-subpass extension only
+    },
+    ExampleDesc {
         name: "hello_synchronization",
         function: wgpu_examples::hello_synchronization::main,
         webgl: false, // No canvas for WebGL

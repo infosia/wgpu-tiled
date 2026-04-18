@@ -551,6 +551,7 @@ fn resource_setup(ctx: &TestingContext) -> ResourceSetup {
                 alpha_to_coverage_enabled: false,
             },
             multiview_mask: None,
+            subpass_target: None,
             cache: None,
         });
 

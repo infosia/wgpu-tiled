@@ -477,6 +477,9 @@ pub struct RenderPipelineDescriptor<
     /// If the pipeline will be used with a multiview render pass, this indicates how many array
     /// layers the attachments will have.
     pub multiview_mask: Option<NonZeroU32>,
+    /// Optional subpass compatibility target metadata.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub subpass_target: Option<wgt::SubpassTarget>,
     /// The pipeline cache to use when creating this pipeline.
     pub cache: Option<PLC>,
 }
@@ -549,6 +552,9 @@ pub struct GeneralRenderPipelineDescriptor<
     /// If the pipeline will be used with a multiview render pass, this indicates how many array
     /// layers the attachments will have.
     pub multiview_mask: Option<NonZeroU32>,
+    /// Optional subpass compatibility target metadata.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub subpass_target: Option<wgt::SubpassTarget>,
     /// The pipeline cache to use when creating this pipeline.
     pub cache: Option<PLC>,
 }
@@ -565,6 +571,7 @@ impl<'a, PLL, SM, PLC> From<RenderPipelineDescriptor<'a, PLL, SM, PLC>>
             multisample: value.multisample,
             fragment: value.fragment,
             multiview_mask: value.multiview_mask,
+            subpass_target: value.subpass_target,
             cache: value.cache,
         }
     }
@@ -582,6 +589,7 @@ impl<'a, PLL, SM, PLC> From<MeshPipelineDescriptor<'a, PLL, SM, PLC>>
             multisample: value.multisample,
             fragment: value.fragment,
             multiview_mask: value.multiview,
+            subpass_target: None,
             cache: value.cache,
         }
     }
@@ -726,6 +734,12 @@ pub enum CreateRenderPipelineError {
     UnalignedShader { group: u32, binding: u32, size: u64 },
     #[error("Dual-source blending requires exactly one color target, but {count} color targets are present")]
     DualSourceBlendingWithMultipleColorTargets { count: usize },
+    #[error(
+        "Subpass target index {index} must be less than subpass descriptor count {subpass_count}"
+    )]
+    SubpassTargetIndexOutOfRange { index: u32, subpass_count: u32 },
+    #[error("Subpass target subpass {subpass} references input from subpass {input_subpass}, which is not earlier")]
+    SubpassTargetInputAttachmentReferencesLaterSubpass { subpass: u32, input_subpass: u32 },
     #[error("{}", concat!(
         "At least one color attachment or depth-stencil attachment was expected, ",
         "but no render target for the pipeline was specified."
@@ -762,6 +776,8 @@ impl WebGpuError for CreateRenderPipelineError {
             | Self::Stage { .. }
             | Self::UnalignedShader { .. }
             | Self::DualSourceBlendingWithMultipleColorTargets { .. }
+            | Self::SubpassTargetIndexOutOfRange { .. }
+            | Self::SubpassTargetInputAttachmentReferencesLaterSubpass { .. }
             | Self::NoTargetSpecified
             | Self::PipelineConstants { .. }
             | Self::VertexAttributeStrideTooLarge { .. } => ErrorType::Validation,
@@ -810,6 +826,7 @@ pub struct RenderPipeline {
     pub(crate) layout: Arc<PipelineLayout>,
     pub(crate) _shader_modules: ArrayVec<Arc<ShaderModule>, { hal::MAX_CONCURRENT_SHADER_STAGES }>,
     pub(crate) pass_context: RenderPassContext,
+    pub(crate) subpass_target: Option<wgt::SubpassTarget>,
     pub(crate) flags: PipelineFlags,
     pub(crate) topology: wgt::PrimitiveTopology,
     pub(crate) strip_index_format: Option<wgt::IndexFormat>,

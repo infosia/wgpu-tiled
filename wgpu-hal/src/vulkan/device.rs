@@ -1638,6 +1638,12 @@ impl crate::Device for super::Device {
             active_subpass_index: None,
             subpass_count: 0,
             active_subpass_mask: None,
+            active_subpass_input_attachments: Vec::new(),
+            subpass_input_attachment_descriptor_sets: Vec::new(),
+            active_color_attachment_views: Vec::new(),
+            active_depth_stencil_view: None,
+            active_input_attachment_descriptor_set: None,
+            input_attachment_descriptor_pools: Vec::new(),
         })
     }
 
@@ -1781,7 +1787,7 @@ impl crate::Device for super::Device {
         desc: &crate::PipelineLayoutDescriptor<super::BindGroupLayout>,
     ) -> Result<super::PipelineLayout, crate::DeviceError> {
         //Note: not bothering with on stack array here as it's low frequency
-        let vk_set_layouts = desc
+        let mut vk_set_layouts = desc
             .bind_group_layouts
             .iter()
             .map(|bgl| match bgl {
@@ -1798,6 +1804,14 @@ impl crate::Device for super::Device {
                 }
             })
             .collect::<Vec<_>>();
+        let input_attachment_descriptor_set_index =
+            if (vk_set_layouts.len() as u32) < self.shared.max_bound_descriptor_sets {
+                let index = vk_set_layouts.len() as u32;
+                vk_set_layouts.push(self.shared.input_attachment_descriptor_set_layout);
+                index
+            } else {
+                u32::MAX
+            };
         let vk_immediates_ranges: Option<vk::PushConstantRange> = if desc.immediate_size != 0 {
             Some(vk::PushConstantRange {
                 stage_flags: vk::ShaderStageFlags::ALL,
@@ -1850,7 +1864,11 @@ impl crate::Device for super::Device {
         }
 
         self.counters.pipeline_layouts.add(1);
-        Ok(super::PipelineLayout { raw, binding_map })
+        Ok(super::PipelineLayout {
+            raw,
+            binding_map,
+            input_attachment_descriptor_set_index,
+        })
     }
     unsafe fn destroy_pipeline_layout(&self, pipeline_layout: super::PipelineLayout) {
         unsafe {
@@ -2173,11 +2191,105 @@ impl crate::Device for super::Device {
             vk::DynamicState::BLEND_CONSTANTS,
             vk::DynamicState::STENCIL_REFERENCE,
         ];
+        let subpass_target = desc.subpass_target;
         let mut compatible_rp_key = super::RenderPassKey {
             sample_count: desc.multisample.count,
             multiview_mask: desc.multiview_mask,
             ..Default::default()
         };
+        let mut compatible_subpass_index = 0;
+        let mut pipeline_input_attachments: Vec<super::PipelineInputAttachmentBinding> = Vec::new();
+        let mut fragment_binding_map = desc.layout.binding_map.clone();
+        if let Some(subpass_target) = subpass_target {
+            compatible_subpass_index = subpass_target.index;
+            compatible_rp_key.subpass_dependencies = subpass_target.dependencies.clone();
+            let Some(current_subpass_desc) = subpass_target
+                .subpass_descs
+                .get(subpass_target.index as usize)
+            else {
+                return Err(crate::PipelineError::Linkage(
+                    wgt::ShaderStages::FRAGMENT,
+                    "subpass target index is out of range for vulkan pipeline".into(),
+                ));
+            };
+            if let Some(stage) = desc.fragment_stage.as_ref() {
+                match *stage.module {
+                    super::ShaderModule::Intermediate {
+                        ref naga_shader, ..
+                    } => {
+                        for (_, global) in naga_shader.module.global_variables.iter() {
+                            let Some(binding) = global.binding.as_ref() else {
+                                continue;
+                            };
+                            let Some(input_attachment_index) = binding.input_attachment_index
+                            else {
+                                continue;
+                            };
+                            if binding.binding >= self.shared.max_input_attachments {
+                                return Err(crate::PipelineError::Linkage(
+                                    wgt::ShaderStages::FRAGMENT,
+                                    format!(
+                                        "input attachment binding {} exceeds backend limit {}",
+                                        binding.binding, self.shared.max_input_attachments
+                                    ),
+                                ));
+                            }
+                            if current_subpass_desc
+                                .input_attachment_indices
+                                .get(input_attachment_index as usize)
+                                .is_none()
+                            {
+                                return Err(crate::PipelineError::Linkage(
+                                    wgt::ShaderStages::FRAGMENT,
+                                    format!(
+                                        "input attachment index {} is out of range for subpass {}",
+                                        input_attachment_index, subpass_target.index
+                                    ),
+                                ));
+                            }
+                            fragment_binding_map.insert(
+                                *binding,
+                                naga::back::spv::BindingInfo {
+                                    binding_array_size: None,
+                                    binding: binding.binding,
+                                    descriptor_set: desc
+                                        .layout
+                                        .input_attachment_descriptor_set_index,
+                                },
+                            );
+                            if !pipeline_input_attachments
+                                .iter()
+                                .any(|mapped| mapped.binding == binding.binding)
+                            {
+                                pipeline_input_attachments.push(
+                                    super::PipelineInputAttachmentBinding {
+                                        binding: binding.binding,
+                                    },
+                                );
+                            }
+                        }
+                    }
+                    super::ShaderModule::Raw(_) => {
+                        if !current_subpass_desc.input_attachment_indices.is_empty() {
+                            return Err(crate::PipelineError::Linkage(
+                                wgt::ShaderStages::FRAGMENT,
+                                "vulkan subpass input attachments require naga shader modules"
+                                    .into(),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        pipeline_input_attachments.sort_unstable_by_key(|mapped| mapped.binding);
+        if !pipeline_input_attachments.is_empty()
+            && desc.layout.input_attachment_descriptor_set_index == u32::MAX
+        {
+            return Err(crate::PipelineError::Linkage(
+                wgt::ShaderStages::FRAGMENT,
+                "pipeline layout has no spare descriptor set slot for input attachments".into(),
+            ));
+        }
         let mut stages = ArrayVec::<_, { crate::MAX_CONCURRENT_SHADER_STAGES }>::new();
         let mut vertex_buffers = Vec::new();
         let mut vertex_attributes = Vec::new();
@@ -2253,11 +2365,8 @@ impl crate::Device for super::Device {
         }
         let compiled_fs = match desc.fragment_stage {
             Some(ref stage) => {
-                let compiled = self.compile_stage(
-                    stage,
-                    naga::ShaderStage::Fragment,
-                    &desc.layout.binding_map,
-                )?;
+                let compiled =
+                    self.compile_stage(stage, naga::ShaderStage::Fragment, &fragment_binding_map)?;
                 stages.push(compiled.create_info);
                 Some(compiled)
             }
@@ -2282,18 +2391,29 @@ impl crate::Device for super::Device {
         }
 
         let mut vk_depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default();
-        if let Some(ref ds) = desc.depth_stencil {
-            let vk_format = self.shared.private_caps.map_texture_format(ds.format);
-            let vk_layout = if ds.is_read_only(desc.primitive.cull_mode) {
-                vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL
-            } else {
-                vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL
-            };
+        let compatible_depth_stencil_layout = desc.depth_stencil.as_ref().map_or(
+            vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+            |depth_stencil| {
+                if depth_stencil.is_read_only(desc.primitive.cull_mode) {
+                    vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL
+                } else {
+                    vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+                }
+            },
+        );
+        let compatible_depth_stencil_format = subpass_target
+            .and_then(|target| target.depth_stencil_format)
+            .or_else(|| desc.depth_stencil.as_ref().map(|state| state.format));
+        if let Some(format) = compatible_depth_stencil_format {
             compatible_rp_key.depth_stencil = Some(super::DepthStencilAttachmentKey {
-                base: super::AttachmentKey::compatible(vk_format, vk_layout),
+                base: super::AttachmentKey::compatible(
+                    self.shared.private_caps.map_texture_format(format),
+                    compatible_depth_stencil_layout,
+                ),
                 stencil_ops: crate::AttachmentOps::all(),
             });
-
+        }
+        if let Some(ref ds) = desc.depth_stencil {
             if ds.is_depth_enabled() {
                 vk_depth_stencil = vk_depth_stencil
                     .depth_test_enable(true)
@@ -2333,9 +2453,34 @@ impl crate::Device for super::Device {
             .alpha_to_coverage_enable(desc.multisample.alpha_to_coverage_enabled)
             .sample_mask(&vk_sample_mask);
 
-        let mut vk_attachments = Vec::with_capacity(desc.color_targets.len());
-        for cat in desc.color_targets {
-            let (key, attarchment) = if let Some(cat) = cat.as_ref() {
+        let blend_attachment_count = if let Some(subpass_target) = subpass_target {
+            let Some(current_subpass_desc) = subpass_target
+                .subpass_descs
+                .get(subpass_target.index as usize)
+            else {
+                return Err(crate::PipelineError::Linkage(
+                    wgt::ShaderStages::FRAGMENT,
+                    "subpass target index is out of range for vulkan pipeline".into(),
+                ));
+            };
+            let count = current_subpass_desc.color_attachment_indices.len();
+            if desc.color_targets.len() > count {
+                return Err(crate::PipelineError::Linkage(
+                    wgt::ShaderStages::FRAGMENT,
+                    "fragment targets exceed active subpass color attachment count".into(),
+                ));
+            }
+            count
+        } else {
+            desc.color_targets.len()
+        };
+        let mut vk_attachments = Vec::with_capacity(blend_attachment_count);
+        for index in 0..blend_attachment_count {
+            let attarchment = if let Some(cat) = desc
+                .color_targets
+                .get(index)
+                .and_then(|target| target.as_ref())
+            {
                 let mut vk_attachment = vk::PipelineColorBlendAttachmentState::default()
                     .color_write_mask(vk::ColorComponentFlags::from_raw(cat.write_mask.bits()));
                 if let Some(ref blend) = cat.blend {
@@ -2350,24 +2495,106 @@ impl crate::Device for super::Device {
                         .src_alpha_blend_factor(alpha_src)
                         .dst_alpha_blend_factor(alpha_dst);
                 }
-
-                let vk_format = self.shared.private_caps.map_texture_format(cat.format);
-                (
-                    Some(super::ColorAttachmentKey {
+                vk_attachment
+            } else {
+                vk::PipelineColorBlendAttachmentState::default()
+            };
+            vk_attachments.push(attarchment);
+        }
+        if let Some(subpass_target) = subpass_target {
+            for format in &subpass_target.color_attachment_formats {
+                let key = format.as_ref().map(|format| super::ColorAttachmentKey {
+                    base: super::AttachmentKey::compatible(
+                        self.shared.private_caps.map_texture_format(*format),
+                        vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+                    ),
+                    resolve: None,
+                });
+                compatible_rp_key.colors.push(key);
+            }
+        } else {
+            for color_target in desc.color_targets {
+                let key = color_target
+                    .as_ref()
+                    .map(|color_target| super::ColorAttachmentKey {
                         base: super::AttachmentKey::compatible(
-                            vk_format,
+                            self.shared
+                                .private_caps
+                                .map_texture_format(color_target.format),
                             vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
                         ),
                         resolve: None,
-                    }),
-                    vk_attachment,
-                )
-            } else {
-                (None, vk::PipelineColorBlendAttachmentState::default())
-            };
+                    });
+                compatible_rp_key.colors.push(key);
+            }
+        }
 
-            compatible_rp_key.colors.push(key);
-            vk_attachments.push(attarchment);
+        let mut next_attachment_index = 0u32;
+        let mut color_attachment_indices = vec![None; compatible_rp_key.colors.len()];
+        for (slot, color_key) in compatible_rp_key.colors.iter().enumerate() {
+            if color_key.is_some() {
+                color_attachment_indices[slot] = Some(next_attachment_index);
+                next_attachment_index += 1;
+            }
+        }
+        let depth_stencil_attachment_index = compatible_rp_key.depth_stencil.as_ref().map(|_| {
+            let index = next_attachment_index;
+            next_attachment_index += 1;
+            index
+        });
+        if let Some(subpass_target) = subpass_target {
+            compatible_rp_key
+                .subpasses
+                .reserve(subpass_target.subpass_descs.len());
+            for subpass in &subpass_target.subpass_descs {
+                let color_attachment_indices_for_subpass = subpass
+                    .color_attachment_indices
+                    .iter()
+                    .map(|&attachment_slot| {
+                        color_attachment_indices
+                            .get(attachment_slot as usize)
+                            .copied()
+                            .flatten()
+                    })
+                    .collect::<Vec<_>>();
+                let resolve_attachment_indices =
+                    vec![vk::ATTACHMENT_UNUSED; color_attachment_indices_for_subpass.len()];
+                let input_attachment_indices = subpass
+                    .input_attachment_indices
+                    .iter()
+                    .map(|&source_subpass| {
+                        let source_desc = subpass_target.subpass_descs.get(source_subpass as usize);
+                        let Some(source_desc) = source_desc else {
+                            return vk::ATTACHMENT_UNUSED;
+                        };
+                        source_desc
+                            .color_attachment_indices
+                            .first()
+                            .and_then(|&attachment_slot| {
+                                color_attachment_indices
+                                    .get(attachment_slot as usize)
+                                    .copied()
+                                    .flatten()
+                            })
+                            .or_else(|| {
+                                source_desc
+                                    .uses_depth_stencil
+                                    .then_some(depth_stencil_attachment_index)
+                                    .flatten()
+                            })
+                            .unwrap_or(vk::ATTACHMENT_UNUSED)
+                    })
+                    .collect::<Vec<_>>();
+                compatible_rp_key.subpasses.push(super::SubpassKey {
+                    color_attachment_indices: color_attachment_indices_for_subpass,
+                    input_attachment_indices,
+                    depth_stencil_index: subpass
+                        .uses_depth_stencil
+                        .then_some(depth_stencil_attachment_index)
+                        .flatten(),
+                    resolve_attachment_indices,
+                });
+            }
         }
 
         let vk_color_blend =
@@ -2391,6 +2618,7 @@ impl crate::Device for super::Device {
                 .color_blend_state(&vk_color_blend)
                 .dynamic_state(&vk_dynamic_state)
                 .render_pass(raw_pass)
+                .subpass(compatible_subpass_index)
         }];
 
         let pipeline_cache = desc
@@ -2447,6 +2675,11 @@ impl crate::Device for super::Device {
         Ok(super::RenderPipeline {
             raw,
             is_multiview: desc.multiview_mask.is_some(),
+            layout: desc.layout.raw,
+            input_attachment_descriptor_set_index: desc
+                .layout
+                .input_attachment_descriptor_set_index,
+            input_attachments: pipeline_input_attachments,
         })
     }
 

@@ -57,6 +57,7 @@ impl crate::framework::Example for Example {
             multisample: Default::default(),
             layout: None,
             depth_stencil: None,
+            subpass_target: None,
             cache: None,
         });
         let texture = device.create_texture(&wgpu::TextureDescriptor {

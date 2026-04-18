@@ -78,6 +78,7 @@ impl Example {
                 ..Default::default()
             },
             multiview_mask: None,
+            subpass_target: None,
             cache: None,
         });
         let mut encoder =

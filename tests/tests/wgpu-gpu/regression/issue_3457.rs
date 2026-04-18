@@ -85,6 +85,7 @@ static PASS_RESET_VERTEX_BUFFER: GpuTestConfiguration = GpuTestConfiguration::ne
                     })],
                 }),
                 multiview_mask: None,
+                subpass_target: None,
                 cache: None,
             });
 
@@ -117,6 +118,7 @@ static PASS_RESET_VERTEX_BUFFER: GpuTestConfiguration = GpuTestConfiguration::ne
                     })],
                 }),
                 multiview_mask: None,
+                subpass_target: None,
                 cache: None,
             });
 

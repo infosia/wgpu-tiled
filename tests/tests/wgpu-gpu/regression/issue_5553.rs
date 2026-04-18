@@ -54,6 +54,7 @@ static ALLOW_INPUT_NOT_CONSUMED: GpuTestConfiguration = GpuTestConfiguration::ne
                     })],
                 }),
                 multiview_mask: None,
+                subpass_target: None,
                 cache: None,
             });
     });

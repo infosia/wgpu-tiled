@@ -81,6 +81,13 @@ fn create_depth_stencil_desc(
     desc
 }
 
+fn create_disabled_depth_stencil_desc() -> Retained<MTLDepthStencilDescriptor> {
+    let desc = MTLDepthStencilDescriptor::new();
+    desc.setDepthCompareFunction(conv::map_compare_function(wgt::CompareFunction::Always));
+    desc.setDepthWriteEnabled(false);
+    desc
+}
+
 const fn convert_vertex_format_to_naga(format: wgt::VertexFormat) -> naga::back::msl::VertexFormat {
     match format {
         wgt::VertexFormat::Uint8 => naga::back::msl::VertexFormat::Uint8,
@@ -1611,12 +1618,25 @@ impl crate::Device for super::Device {
                 }
             };
 
+            let active_subpass_desc = desc
+                .subpass_target
+                .and_then(|target| target.subpass_descs.get(target.index as usize));
+            let depth_stencil_active = active_subpass_desc
+                .map(|subpass| subpass.uses_depth_stencil)
+                .unwrap_or(true);
+
             // Setup pipeline color attachments
-            // TODO(Phase 12): apply subpass-target write-mask muting to prevent color slot bleed
-            // across subpasses in a single Metal encoder.
             for (i, ct) in desc.color_targets.iter().enumerate() {
                 let at_descriptor =
                     unsafe { descriptor.colorAttachments().objectAtIndexedSubscript(i) };
+                let color_slot_active = active_subpass_desc
+                    .map(|subpass| {
+                        subpass
+                            .color_attachment_indices
+                            .iter()
+                            .any(|&index| index as usize == i)
+                    })
+                    .unwrap_or(true);
                 let ct = if let Some(color_target) = ct.as_ref() {
                     color_target
                 } else {
@@ -1629,7 +1649,13 @@ impl crate::Device for super::Device {
                     .private_texture_format_caps
                     .map_format(ct.format);
                 at_descriptor.setPixelFormat(raw_format);
-                at_descriptor.setWriteMask(conv::map_color_write(ct.write_mask));
+                if color_slot_active {
+                    at_descriptor.setWriteMask(conv::map_color_write(ct.write_mask));
+                } else {
+                    at_descriptor.setWriteMask(conv::map_color_write(wgt::ColorWrites::empty()));
+                    at_descriptor.setBlendingEnabled(false);
+                    continue;
+                }
 
                 if let Some(ref blend) = ct.blend {
                     at_descriptor.setBlendingEnabled(true);
@@ -1647,29 +1673,51 @@ impl crate::Device for super::Device {
             }
 
             // Setup depth stencil state
+            let compatible_depth_stencil_format = desc
+                .subpass_target
+                .and_then(|target| target.depth_stencil_format)
+                .or_else(|| desc.depth_stencil.as_ref().map(|state| state.format));
+            if let Some(format) = compatible_depth_stencil_format {
+                let raw_format = self.shared.private_texture_format_caps.map_format(format);
+                let aspects = crate::FormatAspects::from(format);
+                if aspects.contains(crate::FormatAspects::DEPTH) {
+                    descriptor.setDepthAttachmentPixelFormat(raw_format);
+                }
+                if aspects.contains(crate::FormatAspects::STENCIL) {
+                    descriptor.setStencilAttachmentPixelFormat(raw_format);
+                }
+            }
             let depth_stencil = match desc.depth_stencil {
                 Some(ref ds) => {
-                    let raw_format = self
-                        .shared
-                        .private_texture_format_caps
-                        .map_format(ds.format);
-                    let aspects = crate::FormatAspects::from(ds.format);
-                    if aspects.contains(crate::FormatAspects::DEPTH) {
-                        descriptor.setDepthAttachmentPixelFormat(raw_format);
+                    if !depth_stencil_active {
+                        None
+                    } else {
+                        let ds_descriptor = create_depth_stencil_desc(ds);
+                        let raw = self
+                            .shared
+                            .device
+                            .newDepthStencilStateWithDescriptor(&ds_descriptor)
+                            .unwrap();
+                        Some((raw, ds.bias))
                     }
-                    if aspects.contains(crate::FormatAspects::STENCIL) {
-                        descriptor.setStencilAttachmentPixelFormat(raw_format);
-                    }
-
-                    let ds_descriptor = create_depth_stencil_desc(ds);
-                    let raw = self
-                        .shared
-                        .device
-                        .newDepthStencilStateWithDescriptor(&ds_descriptor)
-                        .unwrap();
-                    Some((raw, ds.bias))
                 }
-                None => None,
+                None => {
+                    if desc
+                        .subpass_target
+                        .and_then(|target| target.depth_stencil_format)
+                        .is_some()
+                    {
+                        let ds_descriptor = create_disabled_depth_stencil_desc();
+                        let raw = self
+                            .shared
+                            .device
+                            .newDepthStencilStateWithDescriptor(&ds_descriptor)
+                            .unwrap();
+                        Some((raw, wgt::DepthBiasState::default()))
+                    } else {
+                        None
+                    }
+                }
             };
 
             // Setup multisample state

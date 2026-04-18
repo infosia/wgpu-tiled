@@ -287,6 +287,7 @@ impl<A: hal::Api> Example<A> {
                 write_mask: wgpu_types::ColorWrites::default(),
             })],
             multiview_mask: None,
+            subpass_target: None,
             cache: None,
         };
         let pipeline = unsafe { device.create_render_pipeline(&pipeline_desc).unwrap() };

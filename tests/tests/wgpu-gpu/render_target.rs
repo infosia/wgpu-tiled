@@ -107,6 +107,7 @@ async fn run_test(
             })],
         }),
         multiview_mask: None,
+        subpass_target: None,
         cache: None,
     };
     let pipeline = ctx.device.create_render_pipeline(&pipeline_desc);
@@ -329,6 +330,7 @@ async fn run_test_3d(ctx: TestingContext) {
             })],
         }),
         multiview_mask: None,
+        subpass_target: None,
         cache: None,
     };
     let pipeline = ctx.device.create_render_pipeline(&pipeline_desc);

@@ -236,6 +236,11 @@ pub struct RenderPipelineDescriptor<'a> {
     /// wanted to render to only the 2nd layer, you would use 2=0b10. If you aren't using
     /// multiview this should be `None`.
     pub multiview_mask: Option<NonZeroU32>,
+    /// Optional compatibility target for multi-subpass render passes.
+    ///
+    /// When present, this pipeline is validated against subpass metadata and may only be set on
+    /// matching subpasses.
+    pub subpass_target: Option<wgt::SubpassTarget>,
     /// The pipeline cache to use when creating this pipeline.
     pub cache: Option<&'a PipelineCache>,
 }

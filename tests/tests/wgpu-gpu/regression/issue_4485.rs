@@ -69,6 +69,7 @@ async fn test_impl(ctx: &TestingContext) {
                 })],
             }),
             multiview_mask: None,
+            subpass_target: None,
             cache: None,
         });
 

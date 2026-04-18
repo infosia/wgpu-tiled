@@ -442,6 +442,7 @@ impl<D: Device + DynResource> DynDevice for D {
             fragment_stage: desc.fragment_stage.clone().map(|f| f.expect_downcast()),
             color_targets: desc.color_targets,
             multiview_mask: desc.multiview_mask,
+            subpass_target: desc.subpass_target,
             cache: desc.cache.map(|c| c.expect_downcast_ref()),
         };
 

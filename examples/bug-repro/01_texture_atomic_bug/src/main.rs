@@ -209,6 +209,7 @@ impl State {
             depth_stencil: None,
             multisample: Default::default(),
             multiview_mask: None,
+            subpass_target: None,
             cache: None,
         });
         let raster_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -239,6 +240,7 @@ impl State {
             depth_stencil: None,
             multisample: Default::default(),
             multiview_mask: None,
+            subpass_target: None,
             cache: None,
         });
         let vis_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {

@@ -104,6 +104,7 @@ async fn run_test(ctx: TestingContext, layer_mask: u32, sample_count: u32) {
         },
         layout: None,
         depth_stencil: None,
+        subpass_target: None,
         cache: None,
     };
 

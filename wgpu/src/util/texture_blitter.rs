@@ -131,6 +131,7 @@ impl<'a> TextureBlitterBuilder<'a> {
                     })],
                 }),
                 multiview_mask: None,
+                subpass_target: None,
                 cache: None,
             });
 

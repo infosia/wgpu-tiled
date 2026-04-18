@@ -510,6 +510,9 @@ struct DeviceShared {
     texture_view_identity_factory: ResourceIdentityFactory<vk::ImageView>,
 
     empty_descriptor_set_layout: vk::DescriptorSetLayout,
+    input_attachment_descriptor_set_layout: vk::DescriptorSetLayout,
+    max_bound_descriptor_sets: u32,
+    max_input_attachments: u32,
 
     // The `drop_guard` field must be the last field of this struct so it is dropped last.
     // Do not add new fields after it.
@@ -524,6 +527,10 @@ impl Drop for DeviceShared {
         unsafe {
             self.raw
                 .destroy_descriptor_set_layout(self.empty_descriptor_set_layout, None)
+        };
+        unsafe {
+            self.raw
+                .destroy_descriptor_set_layout(self.input_attachment_descriptor_set_layout, None)
         };
         if self.drop_guard.is_none() {
             unsafe { self.raw.destroy_device(None) };
@@ -859,6 +866,7 @@ impl crate::DynBindGroupLayout for BindGroupLayout {}
 pub struct PipelineLayout {
     raw: vk::PipelineLayout,
     binding_map: naga::back::spv::BindingMap,
+    input_attachment_descriptor_set_index: u32,
 }
 
 impl crate::DynPipelineLayout for PipelineLayout {}
@@ -1034,6 +1042,12 @@ pub struct CommandEncoder {
     active_subpass_index: Option<u32>,
     subpass_count: u32,
     active_subpass_mask: Option<wgt::ActiveSubpassMask>,
+    active_subpass_input_attachments: Vec<Vec<wgt::SubpassInputAttachment>>,
+    subpass_input_attachment_descriptor_sets: Vec<Option<vk::DescriptorSet>>,
+    active_color_attachment_views: Vec<Option<vk::ImageView>>,
+    active_depth_stencil_view: Option<vk::ImageView>,
+    active_input_attachment_descriptor_set: Option<vk::DescriptorSet>,
+    input_attachment_descriptor_pools: Vec<vk::DescriptorPool>,
 }
 
 impl Drop for CommandEncoder {
@@ -1061,6 +1075,9 @@ impl Drop for CommandEncoder {
 
         for (_, view) in self.temp_texture_views.drain() {
             unsafe { self.device.raw.destroy_image_view(view.raw, None) };
+        }
+        for pool in self.input_attachment_descriptor_pools.drain(..) {
+            unsafe { self.device.raw.destroy_descriptor_pool(pool, None) };
         }
 
         self.counters.command_encoders.sub(1);
@@ -1102,10 +1119,18 @@ pub enum ShaderModule {
 
 impl crate::DynShaderModule for ShaderModule {}
 
+#[derive(Clone, Copy, Debug)]
+struct PipelineInputAttachmentBinding {
+    binding: u32,
+}
+
 #[derive(Debug)]
 pub struct RenderPipeline {
     raw: vk::Pipeline,
     is_multiview: bool,
+    layout: vk::PipelineLayout,
+    input_attachment_descriptor_set_index: u32,
+    input_attachments: Vec<PipelineInputAttachmentBinding>,
 }
 
 impl crate::DynRenderPipeline for RenderPipeline {}

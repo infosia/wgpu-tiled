@@ -315,6 +315,7 @@ async fn vertex_formats_common(ctx: TestingContext, tests: &[Test<'_>]) {
                 })],
             }),
             multiview_mask: None,
+            subpass_target: None,
             cache: None,
         };
 

@@ -3966,8 +3966,10 @@ impl Device {
         use wgt::TextureFormatFeatureFlags as Tfff;
 
         self.check_is_valid()?;
+        Self::validate_subpass_target(self.features, desc.subpass_target.as_ref())?;
 
         let mut shader_binding_sizes = FastHashMap::default();
+        let pipeline_subpass_target = desc.subpass_target.clone();
 
         let num_attachments = desc.fragment.as_ref().map(|f| f.targets.len()).unwrap_or(0);
         let max_attachments = self.limits.max_color_attachments as usize;
@@ -4668,6 +4670,7 @@ impl Device {
                 fragment_stage,
                 color_targets,
                 multiview_mask: desc.multiview_mask,
+                subpass_target: desc.subpass_target.as_ref(),
                 cache: cache.as_ref().map(|it| it.raw()),
             };
             unsafe { self.raw().create_render_pipeline(&pipeline_desc) }.map_err(
@@ -4745,6 +4748,7 @@ impl Device {
             layout: pipeline_layout,
             device: self.clone(),
             pass_context,
+            subpass_target: pipeline_subpass_target,
             _shader_modules: shader_modules,
             flags,
             topology: desc.primitive.topology,
@@ -4943,6 +4947,44 @@ impl Device {
         if !features.contains(wgt::Features::TRANSIENT_ATTACHMENTS) {
             return Err(MissingFeatures(wgt::Features::TRANSIENT_ATTACHMENTS).into());
         }
+        Ok(())
+    }
+
+    fn validate_subpass_target(
+        features: wgt::Features,
+        subpass_target: Option<&wgt::SubpassTarget>,
+    ) -> Result<(), pipeline::CreateRenderPipelineError> {
+        let Some(subpass_target) = subpass_target else {
+            return Ok(());
+        };
+
+        if !features.contains(wgt::Features::MULTI_SUBPASS) {
+            return Err(MissingFeatures(wgt::Features::MULTI_SUBPASS).into());
+        }
+
+        let subpass_count = subpass_target.subpass_descs.len() as u32;
+        if subpass_target.index >= subpass_count {
+            return Err(
+                pipeline::CreateRenderPipelineError::SubpassTargetIndexOutOfRange {
+                    index: subpass_target.index,
+                    subpass_count,
+                },
+            );
+        }
+
+        for (subpass, desc) in subpass_target.subpass_descs.iter().enumerate() {
+            for &input_subpass in &desc.input_attachment_indices {
+                if input_subpass >= subpass as u32 {
+                    return Err(
+                        pipeline::CreateRenderPipelineError::SubpassTargetInputAttachmentReferencesLaterSubpass {
+                            subpass: subpass as u32,
+                            input_subpass,
+                        },
+                    );
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -5375,12 +5417,15 @@ crate::impl_storage_item!(Device);
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec;
+
     use super::Device;
+    use crate::pipeline::CreateRenderPipelineError;
     use crate::resource::{
         CreateTransientAttachmentError, CreateTransientDispatchError,
         TransientAttachmentDescriptor, TransientDispatchDescriptor,
     };
-    use wgt::{Features, TextureFormat, TransientSize};
+    use wgt::{Features, SubpassTarget, SubpassTargetDesc, TextureFormat, TransientSize};
 
     #[test]
     fn transient_attachment_feature_check_reports_missing_feature() {
@@ -5473,5 +5518,95 @@ mod tests {
             error,
             CreateTransientDispatchError::InvalidTileSize
         ));
+    }
+
+    #[test]
+    fn subpass_target_validation_requires_feature() {
+        let target = SubpassTarget {
+            index: 0,
+            color_attachment_formats: vec![Some(TextureFormat::Rgba8Unorm)],
+            depth_stencil_format: None,
+            subpass_descs: vec![SubpassTargetDesc {
+                color_attachment_indices: vec![0],
+                uses_depth_stencil: false,
+                input_attachment_indices: vec![],
+            }],
+            dependencies: vec![],
+        };
+        let error = Device::validate_subpass_target(Features::empty(), Some(&target)).unwrap_err();
+        assert!(matches!(
+            error,
+            CreateRenderPipelineError::MissingFeatures(_)
+        ));
+    }
+
+    #[test]
+    fn subpass_target_validation_rejects_out_of_range_index() {
+        let target = SubpassTarget {
+            index: 1,
+            color_attachment_formats: vec![Some(TextureFormat::Rgba8Unorm)],
+            depth_stencil_format: None,
+            subpass_descs: vec![SubpassTargetDesc::default()],
+            dependencies: vec![],
+        };
+        let error =
+            Device::validate_subpass_target(Features::MULTI_SUBPASS, Some(&target)).unwrap_err();
+        assert!(matches!(
+            error,
+            CreateRenderPipelineError::SubpassTargetIndexOutOfRange {
+                index: 1,
+                subpass_count: 1
+            }
+        ));
+    }
+
+    #[test]
+    fn subpass_target_validation_rejects_non_earlier_input_subpass() {
+        let target = SubpassTarget {
+            index: 1,
+            color_attachment_formats: vec![Some(TextureFormat::Rgba8Unorm)],
+            depth_stencil_format: None,
+            subpass_descs: vec![
+                SubpassTargetDesc::default(),
+                SubpassTargetDesc {
+                    color_attachment_indices: vec![0],
+                    uses_depth_stencil: false,
+                    input_attachment_indices: vec![1],
+                },
+            ],
+            dependencies: vec![],
+        };
+        let error =
+            Device::validate_subpass_target(Features::MULTI_SUBPASS, Some(&target)).unwrap_err();
+        assert!(matches!(
+            error,
+            CreateRenderPipelineError::SubpassTargetInputAttachmentReferencesLaterSubpass {
+                subpass: 1,
+                input_subpass: 1
+            }
+        ));
+    }
+
+    #[test]
+    fn subpass_target_validation_accepts_valid_configuration() {
+        let target = SubpassTarget {
+            index: 1,
+            color_attachment_formats: vec![Some(TextureFormat::Rgba8Unorm)],
+            depth_stencil_format: Some(TextureFormat::Depth32Float),
+            subpass_descs: vec![
+                SubpassTargetDesc {
+                    color_attachment_indices: vec![0],
+                    uses_depth_stencil: true,
+                    input_attachment_indices: vec![],
+                },
+                SubpassTargetDesc {
+                    color_attachment_indices: vec![0],
+                    uses_depth_stencil: true,
+                    input_attachment_indices: vec![0],
+                },
+            ],
+            dependencies: vec![],
+        };
+        assert!(Device::validate_subpass_target(Features::MULTI_SUBPASS, Some(&target)).is_ok());
     }
 }

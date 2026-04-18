@@ -139,6 +139,115 @@ impl super::CommandEncoder {
             }
         })
     }
+
+    fn subpass_input_descriptor_image_info(
+        &self,
+        input: wgt::SubpassInputAttachment,
+    ) -> Option<vk::DescriptorImageInfo> {
+        match input.source {
+            wgt::SubpassInputSource::Color {
+                attachment_index, ..
+            } => self
+                .active_color_attachment_views
+                .get(attachment_index as usize)
+                .copied()
+                .flatten()
+                .map(|view| {
+                    vk::DescriptorImageInfo::default()
+                        .image_view(view)
+                        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                }),
+            wgt::SubpassInputSource::Depth { .. } => self.active_depth_stencil_view.map(|view| {
+                vk::DescriptorImageInfo::default()
+                    .image_view(view)
+                    .image_layout(vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL)
+            }),
+        }
+    }
+
+    fn prepare_input_attachment_descriptor_sets(&mut self) -> Result<(), crate::DeviceError> {
+        self.subpass_input_attachment_descriptor_sets.clear();
+        self.subpass_input_attachment_descriptor_sets
+            .resize(self.active_subpass_input_attachments.len(), None);
+
+        let mut set_count = 0u32;
+        let mut descriptor_count = 0u32;
+        for input_attachments in &self.active_subpass_input_attachments {
+            if input_attachments.is_empty() {
+                continue;
+            }
+            set_count += 1;
+            descriptor_count += input_attachments.len() as u32;
+        }
+        if set_count == 0 {
+            return Ok(());
+        }
+
+        let pool_sizes = [vk::DescriptorPoolSize {
+            ty: vk::DescriptorType::INPUT_ATTACHMENT,
+            descriptor_count,
+        }];
+        let pool_info = vk::DescriptorPoolCreateInfo::default()
+            .max_sets(set_count)
+            .pool_sizes(&pool_sizes);
+        let descriptor_pool = unsafe {
+            self.device
+                .raw
+                .create_descriptor_pool(&pool_info, None)
+                .map_err(super::map_host_device_oom_err)?
+        };
+        self.input_attachment_descriptor_pools.push(descriptor_pool);
+
+        let set_layouts =
+            vec![self.device.input_attachment_descriptor_set_layout; set_count as usize];
+        let set_allocate_info = vk::DescriptorSetAllocateInfo::default()
+            .descriptor_pool(descriptor_pool)
+            .set_layouts(&set_layouts);
+        let descriptor_sets = unsafe {
+            self.device
+                .raw
+                .allocate_descriptor_sets(&set_allocate_info)
+                .map_err(super::map_host_device_oom_err)?
+        };
+
+        let mut set_iter = descriptor_sets.into_iter();
+        for (subpass_index, input_attachments) in
+            self.active_subpass_input_attachments.iter().enumerate()
+        {
+            if input_attachments.is_empty() {
+                continue;
+            }
+            let descriptor_set = set_iter.next().expect("descriptor set count mismatch");
+            self.subpass_input_attachment_descriptor_sets[subpass_index] = Some(descriptor_set);
+
+            let mut image_infos = Vec::with_capacity(input_attachments.len());
+            for &input_attachment in input_attachments.iter() {
+                let Some(image_info) = self.subpass_input_descriptor_image_info(input_attachment)
+                else {
+                    log::error!(
+                        "vulkan: invalid subpass input attachment source at subpass {} binding {}",
+                        subpass_index,
+                        input_attachment.binding
+                    );
+                    return Err(crate::DeviceError::Unexpected);
+                };
+                image_infos.push((input_attachment.binding, image_info));
+            }
+            let mut writes = Vec::with_capacity(image_infos.len());
+            for (binding, image_info) in image_infos.iter() {
+                writes.push(
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(descriptor_set)
+                        .dst_binding(*binding)
+                        .descriptor_type(vk::DescriptorType::INPUT_ATTACHMENT)
+                        .image_info(core::slice::from_ref(image_info)),
+                );
+            }
+            unsafe { self.device.raw.update_descriptor_sets(&writes, &[]) };
+        }
+
+        Ok(())
+    }
 }
 
 impl crate::CommandEncoder for super::CommandEncoder {
@@ -168,6 +277,11 @@ impl crate::CommandEncoder for super::CommandEncoder {
         self.active_subpass_index = None;
         self.subpass_count = 0;
         self.active_subpass_mask = None;
+        self.active_subpass_input_attachments.clear();
+        self.subpass_input_attachment_descriptor_sets.clear();
+        self.active_color_attachment_views.clear();
+        self.active_depth_stencil_view = None;
+        self.active_input_attachment_descriptor_set = None;
 
         let vk_info = vk::CommandBufferBeginInfo::default()
             .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
@@ -208,6 +322,14 @@ impl crate::CommandEncoder for super::CommandEncoder {
         self.active_subpass_index = None;
         self.subpass_count = 0;
         self.active_subpass_mask = None;
+        self.active_subpass_input_attachments.clear();
+        self.subpass_input_attachment_descriptor_sets.clear();
+        self.active_color_attachment_views.clear();
+        self.active_depth_stencil_view = None;
+        self.active_input_attachment_descriptor_set = None;
+        for pool in self.input_attachment_descriptor_pools.drain(..) {
+            unsafe { self.device.raw.destroy_descriptor_pool(pool, None) };
+        }
         self.free
             .extend(cmd_bufs.into_iter().map(|cmd_buf| cmd_buf.raw));
         self.free.append(&mut self.discarded);
@@ -820,6 +942,17 @@ impl crate::CommandEncoder for super::CommandEncoder {
         } else {
             None
         };
+        self.active_subpass_input_attachments = desc
+            .subpasses
+            .iter()
+            .map(|subpass| subpass.input_attachments.to_vec())
+            .collect();
+        self.subpass_input_attachment_descriptor_sets.clear();
+        self.active_color_attachment_views.clear();
+        self.active_color_attachment_views
+            .reserve(desc.color_attachments.len());
+        self.active_depth_stencil_view = None;
+        self.active_input_attachment_descriptor_set = None;
 
         let mut vk_clear_values =
             ArrayVec::<vk::ClearValue, { super::MAX_TOTAL_ATTACHMENTS }>::new();
@@ -840,6 +973,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         let mut color_attachment_indices = vec![None; desc.color_attachments.len()];
         let mut resolve_attachment_indices = vec![None; desc.color_attachments.len()];
         let mut depth_stencil_attachment_index = None;
+        let mut transient_attachment_indices = Vec::new();
         let mut next_attachment_index = 0u32;
 
         for (color_slot, cat) in desc.color_attachments.iter().enumerate() {
@@ -858,6 +992,8 @@ impl crate::CommandEncoder for super::CommandEncoder {
                 } else {
                     cat.target.view.identified_raw_view()
                 };
+                self.active_color_attachment_views
+                    .push(Some(color_view.raw));
 
                 vk_clear_values.push(vk::ClearValue {
                     color: unsafe { cat.make_vk_clear_color() },
@@ -873,6 +1009,9 @@ impl crate::CommandEncoder for super::CommandEncoder {
 
                 rp_key.colors.push(Some(color));
                 fb_key.push_view(color_view);
+                if cat.target.usage.contains(wgt::TextureUses::TRANSIENT) {
+                    transient_attachment_indices.push(next_attachment_index - 1);
+                }
                 if let Some(ref at) = cat.resolve_target {
                     resolve_attachment_indices[color_slot] = Some(next_attachment_index);
                     next_attachment_index += 1;
@@ -881,10 +1020,12 @@ impl crate::CommandEncoder for super::CommandEncoder {
                 }
             } else {
                 rp_key.colors.push(None);
+                self.active_color_attachment_views.push(None);
             }
         }
         if let Some(ref ds) = desc.depth_stencil_attachment {
             depth_stencil_attachment_index = Some(next_attachment_index);
+            self.active_depth_stencil_view = Some(ds.target.view.raw);
             vk_clear_values.push(vk::ClearValue {
                 depth_stencil: vk::ClearDepthStencilValue {
                     depth: ds.clear_value.0,
@@ -896,7 +1037,11 @@ impl crate::CommandEncoder for super::CommandEncoder {
                 stencil_ops: ds.stencil_ops,
             });
             fb_key.push_view(ds.target.view.identified_raw_view());
+            if ds.target.usage.contains(wgt::TextureUses::TRANSIENT) {
+                transient_attachment_indices.push(next_attachment_index);
+            }
         }
+        self.prepare_input_attachment_descriptor_sets()?;
 
         if self.subpass_count > 0 {
             rp_key.subpasses.reserve(desc.subpasses.len());
@@ -947,15 +1092,22 @@ impl crate::CommandEncoder for super::CommandEncoder {
                                 subpass_resolve_attachment_indices.push(resolve_attachment_index);
                             }
                             Some(crate::SubpassColorAttachment::Transient {
-                                transient_index: _,
+                                transient_index,
                                 ..
                             }) => {
-                                // TODO(Phase 6): wire transient attachment indices through
-                                // render-pass attachment/framebuffer construction.
-                                log::error!(
-                                    "vulkan: transient subpass color attachments are not wired to render pass/framebuffer attachment lists yet"
-                                );
-                                return Err(crate::DeviceError::Unexpected);
+                                let color_attachment_index = transient_attachment_indices
+                                    .get(*transient_index as usize)
+                                    .copied();
+                                if color_attachment_index.is_none() {
+                                    log::error!(
+                                        "vulkan: transient subpass color attachment index {} is out of range ({} transients)",
+                                        transient_index,
+                                        transient_attachment_indices.len()
+                                    );
+                                    return Err(crate::DeviceError::Unexpected);
+                                }
+                                subpass_color_attachment_indices.push(color_attachment_index);
+                                subpass_resolve_attachment_indices.push(vk::ATTACHMENT_UNUSED);
                             }
                             None => {
                                 subpass_color_attachment_indices.push(None);
@@ -1000,15 +1152,21 @@ impl crate::CommandEncoder for super::CommandEncoder {
                         depth_stencil_attachment_index
                     }
                     Some(crate::SubpassDepthStencilAttachment::Transient {
-                        transient_index: _,
+                        transient_index,
                         ..
                     }) => {
-                        // TODO(Phase 6): wire transient attachment indices through
-                        // render-pass attachment/framebuffer construction.
-                        log::error!(
-                            "vulkan: transient subpass depth/stencil attachments are not wired to render pass/framebuffer attachment lists yet"
-                        );
-                        return Err(crate::DeviceError::Unexpected);
+                        let depth_stencil_index = transient_attachment_indices
+                            .get(*transient_index as usize)
+                            .copied();
+                        if depth_stencil_index.is_none() {
+                            log::error!(
+                                "vulkan: transient subpass depth attachment index {} is out of range ({} transients)",
+                                transient_index,
+                                transient_attachment_indices.len()
+                            );
+                            return Err(crate::DeviceError::Unexpected);
+                        }
+                        depth_stencil_index
                     }
                     None => None,
                 };
@@ -1134,6 +1292,11 @@ impl crate::CommandEncoder for super::CommandEncoder {
         self.active_subpass_index = None;
         self.subpass_count = 0;
         self.active_subpass_mask = None;
+        self.active_subpass_input_attachments.clear();
+        self.subpass_input_attachment_descriptor_sets.clear();
+        self.active_color_attachment_views.clear();
+        self.active_depth_stencil_view = None;
+        self.active_input_attachment_descriptor_set = None;
     }
     unsafe fn next_subpass(&mut self) {
         if self.subpass_count == 0 {
@@ -1158,6 +1321,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
             }
         }
         self.active_subpass_index = (next_subpass < self.subpass_count).then_some(next_subpass);
+        self.active_input_attachment_descriptor_set = None;
     }
     unsafe fn dispatch_transient(&mut self, _dispatch: &super::TransientDispatch) {
         unreachable!()
@@ -1228,6 +1392,54 @@ impl crate::CommandEncoder for super::CommandEncoder {
                 pipeline.raw,
             )
         };
+        if pipeline.input_attachments.is_empty() {
+            self.active_input_attachment_descriptor_set = None;
+            return;
+        }
+        let Some(active_subpass_index) = self.active_subpass_index else {
+            log::error!(
+                "vulkan: render pipeline with input attachments bound outside active subpass"
+            );
+            return;
+        };
+        let Some(descriptor_set) = self
+            .subpass_input_attachment_descriptor_sets
+            .get(active_subpass_index as usize)
+            .copied()
+            .flatten()
+        else {
+            log::error!(
+                "vulkan: missing input attachment descriptor set for subpass {}",
+                active_subpass_index
+            );
+            return;
+        };
+        let subpass_inputs = self
+            .active_subpass_input_attachments
+            .get(active_subpass_index as usize)
+            .map_or(&[][..], |inputs| inputs.as_slice());
+        if pipeline.input_attachments.iter().any(|binding| {
+            !subpass_inputs
+                .iter()
+                .any(|input_attachment| input_attachment.binding == binding.binding)
+        }) {
+            log::error!("vulkan: pipeline input attachment binding is missing in active subpass");
+            return;
+        }
+        if self.active_input_attachment_descriptor_set == Some(descriptor_set) {
+            return;
+        }
+        unsafe {
+            self.device.raw.cmd_bind_descriptor_sets(
+                self.active,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline.layout,
+                pipeline.input_attachment_descriptor_set_index,
+                core::slice::from_ref(&descriptor_set),
+                &[],
+            );
+        }
+        self.active_input_attachment_descriptor_set = Some(descriptor_set);
     }
 
     unsafe fn set_index_buffer<'a>(

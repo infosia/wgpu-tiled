@@ -65,6 +65,7 @@ fn test_with_module(ctx: TestingContext, vertex: wgpu::ShaderModule, fragment: w
                 })],
             }),
             multiview_mask: None,
+            subpass_target: None,
             cache: None,
         });
 }
@@ -547,6 +548,7 @@ fn explicit_layout_validation(ctx: TestingContext) {
                 })],
             }),
             multiview_mask: None,
+            subpass_target: None,
             cache: None,
         });
 }

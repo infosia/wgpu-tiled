@@ -962,8 +962,9 @@ impl GPUDevice {
       depth_stencil,
       multisample,
       fragment,
-      cache: None,
       multiview_mask: None,
+      subpass_target: None,
+      cache: None,
     };
 
     let (id, err) = self.instance.device_create_render_pipeline(

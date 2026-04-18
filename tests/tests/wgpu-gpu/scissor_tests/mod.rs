@@ -70,6 +70,7 @@ async fn scissor_test_impl(
                 })],
             }),
             multiview_mask: None,
+            subpass_target: None,
             cache: None,
         });
 

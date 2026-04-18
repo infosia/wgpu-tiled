@@ -124,6 +124,7 @@ static RENDER_PIPELINE_DEFAULT_LAYOUT_BAD_MODULE: GpuTestConfiguration =
                                 multisample: Default::default(),
                                 fragment: None,
                                 multiview_mask: None,
+                                subpass_target: None,
                                 cache: None,
                             });
 
@@ -175,6 +176,7 @@ static RENDER_PIPELINE_DEFAULT_LAYOUT_BAD_BGL_INDEX: GpuTestConfiguration =
                                     })],
                                 }),
                                 multiview_mask: None,
+                                subpass_target: None,
                                 cache: None,
                             });
 
@@ -216,6 +218,7 @@ static NO_TARGETLESS_RENDER: GpuTestConfiguration = GpuTestConfiguration::new()
                             },
                             fragment: None,
                             multiview_mask: None,
+                            subpass_target: None,
                             cache: None,
                         });
                 }

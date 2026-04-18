@@ -65,6 +65,7 @@ static RESOLVE_WITH_TRANSIENT: GpuTestConfiguration = GpuTestConfiguration::new(
                 })],
             }),
             multiview_mask: None,
+            subpass_target: None,
             cache: None,
         };
         let pipeline = ctx.device.create_render_pipeline(&pipeline_desc);

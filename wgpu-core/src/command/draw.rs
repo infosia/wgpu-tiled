@@ -100,6 +100,8 @@ pub enum RenderCommandError {
     UnalignedIndexBuffer { offset: u64, alignment: usize },
     #[error("Render pipeline targets are incompatible with render pass")]
     IncompatiblePipelineTargets(#[from] crate::device::RenderPassCompatibilityError),
+    #[error("{0} subpass target is incompatible with the active subpass in this render pass")]
+    IncompatibleSubpassTarget(ResourceErrorIdent),
     #[error("{0} writes to depth, while the pass has read-only depth access")]
     IncompatibleDepthAccess(ResourceErrorIdent),
     #[error("{0} writes to stencil, while the pass has read-only stencil access")]
@@ -143,6 +145,7 @@ impl WebGpuError for RenderCommandError {
             | Self::VertexBufferIndexOutOfRange { .. }
             | Self::UnalignedIndexBuffer { .. }
             | Self::UnalignedVertexBuffer { .. }
+            | Self::IncompatibleSubpassTarget(..)
             | Self::IncompatibleDepthAccess(..)
             | Self::IncompatibleStencilAccess(..)
             | Self::InvalidViewportRectSize { .. }

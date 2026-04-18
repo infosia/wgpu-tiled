@@ -57,6 +57,7 @@ async fn run_test(ctx: TestingContext) {
             })],
         }),
         multiview_mask: None,
+        subpass_target: None,
         cache: None,
     };
     let pipeline = ctx.device.create_render_pipeline(&pipeline_desc);

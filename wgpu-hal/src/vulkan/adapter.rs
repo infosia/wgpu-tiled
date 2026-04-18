@@ -2728,6 +2728,30 @@ impl super::Adapter {
                 .create_descriptor_set_layout(&vk::DescriptorSetLayoutCreateInfo::default(), None)
                 .map_err(super::map_host_device_oom_err)?
         };
+        let max_input_attachments = self
+            .phd_capabilities
+            .properties
+            .limits
+            .max_per_stage_descriptor_input_attachments;
+        let input_attachment_bindings = (0..max_input_attachments)
+            .map(|binding| vk::DescriptorSetLayoutBinding {
+                binding,
+                descriptor_type: vk::DescriptorType::INPUT_ATTACHMENT,
+                descriptor_count: 1,
+                stage_flags: vk::ShaderStageFlags::FRAGMENT,
+                p_immutable_samplers: core::ptr::null(),
+                _marker: Default::default(),
+            })
+            .collect::<Vec<_>>();
+        let input_attachment_descriptor_set_layout = unsafe {
+            raw_device
+                .create_descriptor_set_layout(
+                    &vk::DescriptorSetLayoutCreateInfo::default()
+                        .bindings(&input_attachment_bindings),
+                    None,
+                )
+                .map_err(super::map_host_device_oom_err)?
+        };
 
         let shared = Arc::new(super::DeviceShared {
             raw: raw_device,
@@ -2760,6 +2784,13 @@ impl super::Adapter {
             texture_identity_factory: super::ResourceIdentityFactory::new(),
             texture_view_identity_factory: super::ResourceIdentityFactory::new(),
             empty_descriptor_set_layout,
+            input_attachment_descriptor_set_layout,
+            max_bound_descriptor_sets: self
+                .phd_capabilities
+                .properties
+                .limits
+                .max_bound_descriptor_sets,
+            max_input_attachments,
         });
 
         let relay_semaphores = super::RelaySemaphores::new(&shared)?;

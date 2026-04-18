@@ -260,6 +260,7 @@ async fn vertex_index_common(ctx: TestingContext) {
             })],
         }),
         multiview_mask: None,
+        subpass_target: None,
         cache: None,
     };
     let builtin_pipeline = ctx.device.create_render_pipeline(&pipeline_desc);

@@ -219,6 +219,7 @@ impl crate::framework::Example for Example {
             }),
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
+            subpass_target: None,
             cache: None,
         });
         let entity_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -253,6 +254,7 @@ impl crate::framework::Example for Example {
             }),
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
+            subpass_target: None,
             cache: None,
         });
 

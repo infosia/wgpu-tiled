@@ -98,6 +98,7 @@ impl crate::framework::Example for Example {
             )),
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
+            subpass_target: None,
             cache: None,
         });
 
@@ -131,6 +132,7 @@ impl crate::framework::Example for Example {
             )),
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,
+            subpass_target: None,
             cache: None,
         });
 

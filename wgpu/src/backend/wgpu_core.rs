@@ -1394,6 +1394,7 @@ impl dispatch::DeviceInterface for CoreDevice {
                 }
             }),
             multiview_mask: desc.multiview_mask,
+            subpass_target: desc.subpass_target.clone(),
             cache: desc.cache.map(|cache| cache.inner.as_core().id),
         };
 

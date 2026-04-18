@@ -296,6 +296,7 @@ async fn render_pass_test(ctx: &TestingContext, use_render_bundle: bool) {
             depth_stencil: None,
             multisample: MultisampleState::default(),
             multiview_mask: None,
+            subpass_target: None,
             cache: None,
         });
 

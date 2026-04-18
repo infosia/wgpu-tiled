@@ -54,6 +54,7 @@ async fn clip_distances(ctx: TestingContext) {
                 })],
             }),
             multiview_mask: None,
+            subpass_target: None,
             cache: None,
         });
 

@@ -2515,6 +2515,8 @@ pub struct RenderPipelineDescriptor<
     /// If the pipeline will be used with a multiview render pass, this indicates how many array
     /// layers the attachments will have.
     pub multiview_mask: Option<NonZeroU32>,
+    /// Optional subpass compatibility metadata for multi-subpass pipelines.
+    pub subpass_target: Option<&'a wgt::SubpassTarget>,
     /// The cache which will be used and filled when compiling this pipeline
     pub cache: Option<&'a Pc>,
 }
