@@ -648,6 +648,10 @@ impl PhysicalDeviceFeatures {
             | F::MAPPABLE_PRIMARY_BUFFERS
             | F::IMMEDIATES
             | F::MULTI_SUBPASS
+            // Vulkan 1.0 always supports transient attachment usage. Whether this
+            // saves memory on a given adapter is exposed separately via
+            // `AdapterInfo::transient_saves_memory` (LAZILY_ALLOCATED heap check).
+            | F::TRANSIENT_ATTACHMENTS
             | F::ADDRESS_MODE_CLAMP_TO_BORDER
             | F::ADDRESS_MODE_CLAMP_TO_ZERO
             | F::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
@@ -658,9 +662,6 @@ impl PhysicalDeviceFeatures {
             | F::PASSTHROUGH_SHADERS
             | F::MEMORY_DECORATION_COHERENT
             | F::MEMORY_DECORATION_VOLATILE;
-        // TODO(Phase 6): enable once transient attachments are wired into Vulkan render-pass
-        // attachment lists and framebuffer creation end-to-end.
-        features.set(F::TRANSIENT_ATTACHMENTS, false);
 
         let mut dl_flags = Df::COMPUTE_SHADERS
             | Df::BASE_VERTEX

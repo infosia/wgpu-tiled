@@ -501,7 +501,13 @@ impl Writer {
                 dim,
                 arrayed,
                 class,
-            } => LocalType::Image(LocalImageType::from_inner(dim, arrayed, class)),
+            } => {
+                if dim == crate::ImageDimension::SubpassData {
+                    self.capabilities_used
+                        .insert(spirv::Capability::InputAttachment);
+                }
+                LocalType::Image(LocalImageType::from_inner(dim, arrayed, class))
+            }
             crate::TypeInner::Sampler { comparison: _ } => LocalType::Sampler,
             crate::TypeInner::AccelerationStructure { .. } => LocalType::AccelerationStructure,
             crate::TypeInner::RayQuery { .. } => LocalType::RayQuery,

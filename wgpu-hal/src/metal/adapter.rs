@@ -983,6 +983,10 @@ impl super::CapabilitiesQuery {
                         || device.supportsFamily(MTLGPUFamily::Mac2)))
                 || (available!(macos = 10.15, ios = 14.0, tvos = 16.0, visionos = 1.0)
                     && device.supportsShaderBarycentricCoordinates()),
+            // Tile-shading support tracks Apple4+ and Mac2 families.
+            supports_tile_shading: family_check
+                && (device.supportsFamily(MTLGPUFamily::Apple4)
+                    || device.supportsFamily(MTLGPUFamily::Mac2)),
             // https://developer.apple.com/metal/Metal-Feature-Set-Tables.pdf#page=3
             // See https://github.com/gfx-rs/wgpu/pull/8725 for more details
             supports_memoryless_storage: metal4
@@ -1152,9 +1156,11 @@ impl super::CapabilitiesQuery {
             features.insert(F::MULTIVIEW);
         }
 
-        // TODO(Phase 12): enable once Metal begin_render_pass consumes subpass/transient
-        // descriptors end-to-end.
-        features.set(F::TRANSIENT_ATTACHMENTS | F::MULTI_SUBPASS, false);
+        // Subpasses require tile-shading-capable hardware and memoryless storage for transient
+        // attachment backing.
+        let supports_subpasses = self.supports_tile_shading && self.supports_memoryless_storage;
+        features.set(F::MULTI_SUBPASS, supports_subpasses);
+        features.set(F::TRANSIENT_ATTACHMENTS, supports_subpasses);
 
         features.set(F::EXPERIMENTAL_RAY_QUERY, self.supports_raytracing);
 
@@ -1190,8 +1196,7 @@ impl super::CapabilitiesQuery {
             .set(wgt::DownlevelFlags::ANISOTROPIC_FILTERING, true);
 
         let base = wgt::Limits::default();
-        // TODO(Phase 12): expose non-zero subpass/tile limits once multi-subpass wiring is complete.
-        let supports_subpasses = false;
+        let supports_subpasses = self.supports_tile_shading && self.supports_memoryless_storage;
         let max_subpass_attachments = if supports_subpasses {
             self.max_color_render_targets as u32
         } else {
@@ -1202,7 +1207,11 @@ impl super::CapabilitiesQuery {
         } else {
             0
         };
-        let estimated_tile_memory_bytes = if supports_subpasses { 32 * 1024 } else { 0 };
+        let estimated_tile_memory_bytes = if supports_subpasses {
+            self.max_total_threadgroup_memory
+        } else {
+            0
+        };
         // Be careful adjusting limits here. The `AdapterShared` stores the
         // original `PrivateCapabilities`, so code could accidentally use
         // the wrong value. See <https://github.com/gfx-rs/wgpu/issues/8715>.

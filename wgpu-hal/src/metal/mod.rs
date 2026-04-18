@@ -327,6 +327,7 @@ struct CapabilitiesQuery {
     max_task_payload_size: u32,
     supported_vertex_amplification_factor: u32,
     shader_barycentrics: bool,
+    supports_tile_shading: bool,
     supports_memoryless_storage: bool,
     supports_raytracing: bool,
 }

@@ -1,4 +1,5 @@
-use alloc::boxed::Box;
+use alloc::{boxed::Box, vec::Vec};
+use core::fmt;
 
 use thiserror::Error;
 
@@ -100,8 +101,13 @@ pub enum RenderCommandError {
     UnalignedIndexBuffer { offset: u64, alignment: usize },
     #[error("Render pipeline targets are incompatible with render pass")]
     IncompatiblePipelineTargets(#[from] crate::device::RenderPassCompatibilityError),
-    #[error("{0} subpass target is incompatible with the active subpass in this render pass")]
-    IncompatibleSubpassTarget(ResourceErrorIdent),
+    #[error(
+        "{pipeline} subpass target is incompatible with the active subpass in this render pass: {mismatch}"
+    )]
+    IncompatibleSubpassTarget {
+        pipeline: ResourceErrorIdent,
+        mismatch: SubpassTargetMismatch,
+    },
     #[error("{0} writes to depth, while the pass has read-only depth access")]
     IncompatibleDepthAccess(ResourceErrorIdent),
     #[error("{0} writes to stencil, while the pass has read-only stencil access")]
@@ -145,7 +151,7 @@ impl WebGpuError for RenderCommandError {
             | Self::VertexBufferIndexOutOfRange { .. }
             | Self::UnalignedIndexBuffer { .. }
             | Self::UnalignedVertexBuffer { .. }
-            | Self::IncompatibleSubpassTarget(..)
+            | Self::IncompatibleSubpassTarget { .. }
             | Self::IncompatibleDepthAccess(..)
             | Self::IncompatibleStencilAccess(..)
             | Self::InvalidViewportRectSize { .. }
@@ -153,6 +159,98 @@ impl WebGpuError for RenderCommandError {
             | Self::InvalidViewportDepth(..)
             | Self::InvalidScissorRect(..)
             | Self::Unimplemented(..) => ErrorType::Validation,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum SubpassTargetMismatch {
+    MissingCurrentSubpass,
+    CurrentSubpassOutOfRange {
+        current_subpass_index: u32,
+        subpass_count: usize,
+    },
+    ActiveSubpassIndex {
+        pipeline_subpass_index: u32,
+        current_subpass_index: u32,
+    },
+    ColorAttachmentFormats {
+        pipeline: Vec<Option<wgt::TextureFormat>>,
+        pass: Vec<Option<wgt::TextureFormat>>,
+    },
+    DepthStencilFormat {
+        pipeline: Option<wgt::TextureFormat>,
+        pass: Option<wgt::TextureFormat>,
+    },
+    MissingDependency(wgt::SubpassDependency),
+    SubpassCount {
+        pipeline_subpass_count: usize,
+        pass_subpass_count: usize,
+    },
+    SubpassColorAttachmentIndices {
+        subpass_index: u32,
+    },
+    SubpassUsesDepthStencil {
+        subpass_index: u32,
+    },
+    SubpassInputAttachmentIndices {
+        subpass_index: u32,
+    },
+}
+
+impl fmt::Display for SubpassTargetMismatch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingCurrentSubpass => {
+                f.write_str("render pass has no active subpass when a subpass target is required")
+            }
+            Self::CurrentSubpassOutOfRange {
+                current_subpass_index,
+                subpass_count,
+            } => write!(
+                f,
+                "current subpass index {current_subpass_index} is out of range for {subpass_count} subpasses"
+            ),
+            Self::ActiveSubpassIndex {
+                pipeline_subpass_index,
+                current_subpass_index,
+            } => write!(
+                f,
+                "pipeline subpass index {pipeline_subpass_index} does not match active subpass {current_subpass_index}"
+            ),
+            Self::ColorAttachmentFormats { pipeline, pass } => write!(
+                f,
+                "color attachment format list does not match the render pass (pipeline: {pipeline:?}, pass: {pass:?})"
+            ),
+            Self::DepthStencilFormat { pipeline, pass } => write!(
+                f,
+                "depth/stencil format does not match the render pass (pipeline: {pipeline:?}, pass: {pass:?})"
+            ),
+            Self::MissingDependency(dependency) => {
+                write!(
+                    f,
+                    "subpass dependency {dependency:?} is not present in the render pass"
+                )
+            }
+            Self::SubpassCount {
+                pipeline_subpass_count,
+                pass_subpass_count,
+            } => write!(
+                f,
+                "pipeline expects {pipeline_subpass_count} subpasses but render pass has {pass_subpass_count}"
+            ),
+            Self::SubpassColorAttachmentIndices { subpass_index } => write!(
+                f,
+                "subpass {subpass_index} color attachment indices do not match"
+            ),
+            Self::SubpassUsesDepthStencil { subpass_index } => write!(
+                f,
+                "subpass {subpass_index} depth/stencil usage does not match"
+            ),
+            Self::SubpassInputAttachmentIndices { subpass_index } => write!(
+                f,
+                "subpass {subpass_index} input attachment source subpass indices do not match"
+            ),
         }
     }
 }

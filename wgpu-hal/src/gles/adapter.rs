@@ -673,10 +673,10 @@ impl super::Adapter {
                 || extensions.contains("EXT_shader_framebuffer_fetch"),
         );
 
-        features.set(
-            wgt::Features::TRANSIENT_ATTACHMENTS | wgt::Features::MULTI_SUBPASS,
-            true,
-        );
+        // GLES always exposes Tier B multi-subpass support (sampler-based input attachments).
+        // Tier A is promoted separately via FRAMEBUFFER_FETCH when the extension is present.
+        features.set(wgt::Features::MULTI_SUBPASS, true);
+        features.set(wgt::Features::TRANSIENT_ATTACHMENTS, true);
         features.set(
             wgt::Features::FRAMEBUFFER_FETCH,
             private_caps.contains(super::PrivateCapabilities::SHADER_FRAMEBUFFER_FETCH),

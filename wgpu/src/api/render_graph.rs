@@ -614,6 +614,39 @@ impl RenderGraph {
         }
     }
 
+    /// Builds a [`SubpassTarget`] compatible with this graph.
+    pub fn make_subpass_target(
+        &self,
+        index: u32,
+        color_attachment_formats: &[Option<TextureFormat>],
+        depth_stencil_format: Option<TextureFormat>,
+    ) -> SubpassTarget {
+        let subpass_descs = self
+            .subpasses
+            .iter()
+            .map(|subpass| SubpassTargetDesc {
+                color_attachment_indices: subpass.color_attachment_indices.clone(),
+                uses_depth_stencil: subpass.uses_depth_stencil,
+                input_attachment_indices: subpass
+                    .input_attachments
+                    .iter()
+                    .map(|input| match input.source {
+                        SubpassInputSource::Color { subpass, .. }
+                        | SubpassInputSource::Depth { subpass } => subpass.0,
+                    })
+                    .collect(),
+            })
+            .collect();
+
+        SubpassTarget {
+            index,
+            color_attachment_formats: color_attachment_formats.to_vec(),
+            depth_stencil_format,
+            subpass_descs,
+            dependencies: self.dependencies.clone(),
+        }
+    }
+
     /// Returns the label associated with an attachment id.
     pub fn attachment_label(&self, attachment: AttachmentId) -> Option<&str> {
         self.attachment_labels
@@ -928,6 +961,31 @@ mod tests {
         assert_eq!(views.subpasses[0].color_attachment_indices, &[0]);
         assert_eq!(views.subpasses[1].color_attachment_indices, &[1]);
         assert_eq!(views.subpasses[1].input_attachments.len(), 1);
+    }
+
+    #[test]
+    fn make_subpass_target_matches_graph_metadata() {
+        let mut builder = RenderGraphBuilder::new();
+        let gbuffer = builder.add_transient_color("gbuffer", TextureFormat::Rgba8Unorm);
+        let out = builder.add_persistent_color("out", TextureFormat::Rgba8Unorm);
+        let _ = builder.add_subpass("s0").writes_color(gbuffer);
+        let _ = builder.add_subpass("s1").reads(gbuffer).writes_color(out);
+        let graph = builder.build().unwrap();
+
+        let target = graph.make_subpass_target(
+            1,
+            &[
+                Some(TextureFormat::Rgba8Unorm),
+                Some(TextureFormat::Rgba8Unorm),
+            ],
+            None,
+        );
+        assert_eq!(target.index, 1);
+        assert_eq!(target.subpass_descs.len(), 2);
+        assert_eq!(target.subpass_descs[0].color_attachment_indices, vec![0]);
+        assert_eq!(target.subpass_descs[1].color_attachment_indices, vec![1]);
+        assert_eq!(target.subpass_descs[1].input_attachment_indices, vec![0]);
+        assert_eq!(target.dependencies, graph.dependencies);
     }
 
     #[test]

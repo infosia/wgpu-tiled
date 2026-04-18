@@ -48,10 +48,24 @@ Bottom level categories:
 
 - Added foundational tiled-rendering API surface in `wgpu-types`: transient attachment descriptors/ops, subpass descriptors/dependencies/layout metadata, active subpass masks, and new related feature/limit fields.
 - Added `RenderPipelineDescriptor::subpass_target` in `wgpu`, with `wgpu-core` creation-time/runtime validation and trace/player plumbing for subpass compatibility metadata.
+- Re-exported `SubpassTarget` and `SubpassTargetDesc` from `wgpu` so applications can construct `RenderPipelineDescriptor::subpass_target` without directly depending on `wgpu-types`.
 - Vulkan render pipeline creation now uses subpass compatibility metadata to build a compatible multi-subpass render-pass key and pipeline subpass index.
 - Metal render pipeline creation now mutes color write masks and depth/stencil state for attachments not used by the active subpass target.
 - Render pass transient validation errors are now reported as explicit load/store operation mismatches for transient usages.
 - `RenderPipelineDescriptor::subpass_target` now fails pipeline creation with `MissingFeatures(MULTI_SUBPASS)` when the feature is unavailable.
+- Vulkan now advertises `TRANSIENT_ATTACHMENTS` together with `MULTI_SUBPASS`, and Metal now advertises `MULTI_SUBPASS`/`TRANSIENT_ATTACHMENTS` on tile-shading + memoryless-storage capable adapters.
+- Naga SPIR-V emission now adds the `InputAttachment` capability for subpass-data image types.
+
+#### Examples
+
+- Replaced the `deferred_rendering` placeholder with a real headless two-subpass deferred sample that writes a G-buffer in subpass 0 and reads it as an input attachment in subpass 1.
+- `deferred_rendering` now requests `MULTI_SUBPASS | TRANSIENT_ATTACHMENTS` and requests non-zero subpass/input-attachment limits.
+
+### Testing/Internal
+
+#### General
+
+- Added a headless `wgpu-gpu` deferred subpass smoke test module (`deferred_rendering`) with backend expectations while backend-specific readback/output issues are still being burned down.
 
 ## v29.0.1 (2026-03-26)
 
