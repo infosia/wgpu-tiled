@@ -1,6 +1,6 @@
 use wgpu_test::{
-    gpu_test, image::ReadbackBuffers, FailureCase, GpuTestConfiguration, GpuTestInitializer,
-    TestParameters, TestingContext,
+    gpu_test, image::ReadbackBuffers, GpuTestConfiguration, GpuTestInitializer, TestParameters,
+    TestingContext,
 };
 
 pub fn all_tests(vec: &mut Vec<GpuTestInitializer>) {
@@ -17,19 +17,7 @@ static DEFERRED_SUBPASS_SMOKE: GpuTestConfiguration = GpuTestConfiguration::new(
                 max_subpass_color_attachments: 2,
                 max_input_attachments: 1,
                 ..wgpu::Limits::downlevel_defaults()
-            })
-            // TODO(Phase 13): Vulkan still fails this test before readback with
-            // "Buffer with 'Texture Readback' label has been destroyed".
-            .expect_fail(
-                FailureCase::backend(wgpu::Backends::VULKAN)
-                    .panic("buffer with 'texture readback' label has been destroyed"),
-            )
-            // TODO(Phase 13): Metal currently produces incorrect output for this
-            // subpass-input path and fails the pixel assertion.
-            .expect_fail(
-                FailureCase::backend(wgpu::Backends::METAL)
-                    .panic("assertion `left == right` failed"),
-            ),
+            }),
     )
     .run_async(run_test);
 
@@ -243,7 +231,7 @@ fn fs_main(@builtin(position) position: vec4f) -> @location(0) vec4f {
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
+                        store: wgpu::StoreOp::Discard,
                     },
                 }),
                 Some(wgpu::RenderPassColorAttachment {

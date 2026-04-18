@@ -266,7 +266,7 @@ impl super::DeviceShared {
                                     let layout = if ds_attachment_index == Some(attachment) {
                                         vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL
                                     } else {
-                                        vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
+                                        vk::ImageLayout::GENERAL
                                     };
                                     vk::AttachmentReference { attachment, layout }
                                 }
@@ -362,24 +362,32 @@ impl super::DeviceShared {
                 let vk_subpass_dependencies = subpass_dependencies
                     .iter()
                     .map(|dependency| {
-                        let (src_stage_mask, src_access_mask) = match dependency.dependency_type {
-                            wgt::SubpassDependencyType::ColorToInput => (
-                                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                                vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
-                            ),
-                            wgt::SubpassDependencyType::DepthToInput => (
-                                vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS
-                                    | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
-                                vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
-                            ),
-                            wgt::SubpassDependencyType::ColorDepthToInput => (
-                                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                                    | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS
-                                    | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
-                                vk::AccessFlags::COLOR_ATTACHMENT_WRITE
-                                    | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
-                            ),
-                        };
+                        let (src_stage_mask, src_access_mask, dst_access_mask) =
+                            match dependency.dependency_type {
+                                wgt::SubpassDependencyType::ColorToInput => (
+                                    vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                                    vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+                                    vk::AccessFlags::INPUT_ATTACHMENT_READ
+                                        | vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+                                ),
+                                wgt::SubpassDependencyType::DepthToInput => (
+                                    vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS
+                                        | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
+                                    vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+                                    vk::AccessFlags::INPUT_ATTACHMENT_READ
+                                        | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+                                ),
+                                wgt::SubpassDependencyType::ColorDepthToInput => (
+                                    vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                                        | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS
+                                        | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
+                                    vk::AccessFlags::COLOR_ATTACHMENT_WRITE
+                                        | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+                                    vk::AccessFlags::INPUT_ATTACHMENT_READ
+                                        | vk::AccessFlags::COLOR_ATTACHMENT_WRITE
+                                        | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+                                ),
+                            };
 
                         vk::SubpassDependency::default()
                             .src_subpass(dependency.src_subpass.0)
@@ -387,7 +395,7 @@ impl super::DeviceShared {
                             .src_stage_mask(src_stage_mask)
                             .src_access_mask(src_access_mask)
                             .dst_stage_mask(dependency_dst_stage_mask)
-                            .dst_access_mask(vk::AccessFlags::INPUT_ATTACHMENT_READ)
+                            .dst_access_mask(dst_access_mask)
                             .dependency_flags(if dependency.by_region {
                                 vk::DependencyFlags::BY_REGION
                             } else {

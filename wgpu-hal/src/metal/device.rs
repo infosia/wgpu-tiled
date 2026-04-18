@@ -141,11 +141,26 @@ const fn convert_vertex_format_to_naga(format: wgt::VertexFormat) -> naga::back:
     }
 }
 
+fn remap_fragment_output_binding(binding: &mut Option<naga::Binding>, remap: &[u32]) -> bool {
+    let Some(naga::Binding::Location { location, .. }) = binding else {
+        return false;
+    };
+    if let Some(&mapped) = remap.get(*location as usize) {
+        if *location == mapped {
+            return false;
+        }
+        *location = mapped;
+        return true;
+    }
+    false
+}
+
 impl super::Device {
     fn load_shader(
         &self,
         stage: &crate::ProgrammableStage<super::ShaderModule>,
         vertex_buffer_mappings: &[naga::back::msl::VertexBufferMapping],
+        fragment_color_output_remap: Option<&[u32]>,
         layout: &super::PipelineLayout,
         primitive_class: MTLPrimitiveTopologyClass,
         naga_stage: naga::ShaderStage,
@@ -162,8 +177,37 @@ impl super::Device {
                 .map_err(|e| {
                     crate::PipelineError::PipelineConstants(stage_bit, format!("MSL: {e:?}"))
                 })?;
+                let mut module = module.into_owned();
 
                 let ep_resources = &layout.per_stage_map[naga_stage];
+                if naga_stage == naga::ShaderStage::Fragment {
+                    if let Some(remap) = fragment_color_output_remap {
+                        if let Some(ep_index) = module
+                            .entry_points
+                            .iter()
+                            .position(|ep| ep.stage == naga_stage && ep.name == stage.entry_point)
+                        {
+                            let ep = &mut module.entry_points[ep_index];
+                            if let Some(result) = ep.function.result.as_mut() {
+                                remap_fragment_output_binding(&mut result.binding, remap);
+                                let mut ty = module.types[result.ty].clone();
+                                if let naga::TypeInner::Struct { members, .. } = &mut ty.inner {
+                                    let mut members_changed = false;
+                                    for member in members {
+                                        members_changed |= remap_fragment_output_binding(
+                                            &mut member.binding,
+                                            remap,
+                                        );
+                                    }
+                                    if members_changed {
+                                        let span = module.types.get_span(result.ty);
+                                        result.ty = module.types.insert(ty, span);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
 
                 let bounds_check_policy = if stage.module.bounds_checks.bounds_checks {
                     naga::proc::BoundsCheckPolicy::Restrict
@@ -1405,6 +1449,7 @@ impl crate::Device for super::Device {
                         let vs = self.load_shader(
                             vertex_stage,
                             &vertex_buffer_mappings,
+                            None,
                             desc.layout,
                             primitive_class,
                             naga::ShaderStage::Vertex,
@@ -1511,6 +1556,7 @@ impl crate::Device for super::Device {
                         let ts = self.load_shader(
                             task_stage,
                             &[],
+                            None,
                             desc.layout,
                             primitive_class,
                             naga::ShaderStage::Task,
@@ -1540,6 +1586,7 @@ impl crate::Device for super::Device {
                         let ms = self.load_shader(
                             mesh_stage,
                             &[],
+                            None,
                             desc.layout,
                             primitive_class,
                             naga::ShaderStage::Mesh,
@@ -1575,12 +1622,19 @@ impl crate::Device for super::Device {
                 ),
             };
 
+            let active_subpass_desc = desc
+                .subpass_target
+                .and_then(|target| target.subpass_descs.get(target.index as usize));
+            let fragment_output_remap =
+                active_subpass_desc.map(|subpass| subpass.color_attachment_indices.as_slice());
+
             // Fragment shader
             let fs_info = match desc.fragment_stage {
                 Some(ref stage) => {
                     let fs = self.load_shader(
                         stage,
                         &[],
+                        fragment_output_remap,
                         desc.layout,
                         primitive_class,
                         naga::ShaderStage::Fragment,
@@ -1618,45 +1672,70 @@ impl crate::Device for super::Device {
                 }
             };
 
-            let active_subpass_desc = desc
-                .subpass_target
-                .and_then(|target| target.subpass_descs.get(target.index as usize));
             let depth_stencil_active = active_subpass_desc
                 .map(|subpass| subpass.uses_depth_stencil)
                 .unwrap_or(true);
 
             // Setup pipeline color attachments
-            for (i, ct) in desc.color_targets.iter().enumerate() {
+            let pass_color_formats = desc
+                .subpass_target
+                .map(|target| target.color_attachment_formats.clone())
+                .unwrap_or_else(|| {
+                    desc.color_targets
+                        .iter()
+                        .map(|target| target.as_ref().map(|target| target.format))
+                        .collect()
+                });
+            for (slot, format) in pass_color_formats.iter().enumerate() {
                 let at_descriptor =
-                    unsafe { descriptor.colorAttachments().objectAtIndexedSubscript(i) };
-                let color_slot_active = active_subpass_desc
-                    .map(|subpass| {
-                        subpass
-                            .color_attachment_indices
-                            .iter()
-                            .any(|&index| index as usize == i)
-                    })
-                    .unwrap_or(true);
-                let ct = if let Some(color_target) = ct.as_ref() {
-                    color_target
-                } else {
-                    at_descriptor.setPixelFormat(MTLPixelFormat::Invalid);
+                    unsafe { descriptor.colorAttachments().objectAtIndexedSubscript(slot) };
+                match format {
+                    Some(format) => {
+                        at_descriptor.setPixelFormat(
+                            self.shared.private_texture_format_caps.map_format(*format),
+                        );
+                    }
+                    None => at_descriptor.setPixelFormat(MTLPixelFormat::Invalid),
+                }
+                at_descriptor.setWriteMask(conv::map_color_write(wgt::ColorWrites::empty()));
+                at_descriptor.setBlendingEnabled(false);
+            }
+
+            for (local_slot, ct) in desc.color_targets.iter().enumerate() {
+                let Some(ct) = ct.as_ref() else {
                     continue;
                 };
-
-                let raw_format = self
-                    .shared
-                    .private_texture_format_caps
-                    .map_format(ct.format);
-                at_descriptor.setPixelFormat(raw_format);
-                if color_slot_active {
-                    at_descriptor.setWriteMask(conv::map_color_write(ct.write_mask));
-                } else {
-                    at_descriptor.setWriteMask(conv::map_color_write(wgt::ColorWrites::empty()));
-                    at_descriptor.setBlendingEnabled(false);
-                    continue;
+                let slot = active_subpass_desc
+                    .and_then(|subpass| subpass.color_attachment_indices.get(local_slot).copied())
+                    .unwrap_or(local_slot as u32) as usize;
+                let Some(expected_format) = pass_color_formats.get(slot).copied() else {
+                    return Err(crate::PipelineError::Linkage(
+                        wgt::ShaderStages::FRAGMENT,
+                        format!(
+                            "subpass color attachment index {slot} is out of range for {} pass color formats",
+                            pass_color_formats.len()
+                        ),
+                    ));
+                };
+                if let Some(expected_format) = expected_format {
+                    if expected_format != ct.format {
+                        return Err(crate::PipelineError::Linkage(
+                            wgt::ShaderStages::FRAGMENT,
+                            format!(
+                                "subpass color attachment slot {slot} expects format {:?}, but pipeline target uses {:?}",
+                                expected_format, ct.format
+                            ),
+                        ));
+                    }
                 }
-
+                let at_descriptor =
+                    unsafe { descriptor.colorAttachments().objectAtIndexedSubscript(slot) };
+                at_descriptor.setPixelFormat(
+                    self.shared
+                        .private_texture_format_caps
+                        .map_format(ct.format),
+                );
+                at_descriptor.setWriteMask(conv::map_color_write(ct.write_mask));
                 if let Some(ref blend) = ct.blend {
                     at_descriptor.setBlendingEnabled(true);
                     let (color_op, color_src, color_dst) = conv::map_blend_component(&blend.color);
@@ -1830,6 +1909,7 @@ impl crate::Device for super::Device {
                 self.load_shader(
                     &desc.stage,
                     &[],
+                    None,
                     desc.layout,
                     MTLPrimitiveTopologyClass::Unspecified,
                     naga::ShaderStage::Compute,

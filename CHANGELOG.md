@@ -65,7 +65,7 @@ Bottom level categories:
 
 #### General
 
-- Added a headless `wgpu-gpu` deferred subpass smoke test module (`deferred_rendering`) with backend expectations while backend-specific readback/output issues are still being burned down.
+- Added a headless `wgpu-gpu` deferred subpass smoke test module (`deferred_rendering`) that now runs green on Vulkan and Metal without backend-specific expected-failure markers.
 
 ## v29.0.1 (2026-03-26)
 

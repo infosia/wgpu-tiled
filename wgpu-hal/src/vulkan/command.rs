@@ -155,7 +155,7 @@ impl super::CommandEncoder {
                 .map(|view| {
                     vk::DescriptorImageInfo::default()
                         .image_view(view)
-                        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                        .image_layout(vk::ImageLayout::GENERAL)
                 }),
             wgt::SubpassInputSource::Depth { .. } => self.active_depth_stencil_view.map(|view| {
                 vk::DescriptorImageInfo::default()
@@ -171,17 +171,18 @@ impl super::CommandEncoder {
             .resize(self.active_subpass_input_attachments.len(), None);
 
         let mut set_count = 0u32;
-        let mut descriptor_count = 0u32;
         for input_attachments in &self.active_subpass_input_attachments {
             if input_attachments.is_empty() {
                 continue;
             }
             set_count += 1;
-            descriptor_count += input_attachments.len() as u32;
         }
         if set_count == 0 {
             return Ok(());
         }
+        // The shared input-attachment descriptor-set layout reserves
+        // `max_input_attachments` bindings per set.
+        let descriptor_count = set_count.saturating_mul(self.device.max_input_attachments);
 
         let pool_sizes = [vk::DescriptorPoolSize {
             ty: vk::DescriptorType::INPUT_ATTACHMENT,
