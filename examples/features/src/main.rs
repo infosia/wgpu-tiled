@@ -129,6 +129,12 @@ const EXAMPLES: &[ExampleDesc] = &[
         webgpu: true,
     },
     ExampleDesc {
+        name: "subpass_render_graph",
+        function: wgpu_examples::subpass_render_graph::main,
+        webgl: false,  // Multi-subpass extension only
+        webgpu: false, // Multi-subpass extension only
+    },
+    ExampleDesc {
         name: "texture_arrays",
         function: wgpu_examples::texture_arrays::main,
         webgl: false,  // No texture arrays
