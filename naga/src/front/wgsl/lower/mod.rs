@@ -1322,7 +1322,7 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
                             .map(|ast| self.resolve_ast_type(ast, &mut ctx.as_const()))
                             .transpose()?;
 
-                    let (ty, initializer) = self.type_and_init(
+                    let (mut ty, initializer) = self.type_and_init(
                         v.name,
                         v.init,
                         explicit_ty,
@@ -1331,9 +1331,49 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
                     )?;
 
                     let binding = if let Some(ref binding) = v.binding {
+                        let input_attachment_index = binding
+                            .input_attachment_index
+                            .map(|expr| {
+                                self.const_u32(expr, &mut ctx.as_const())
+                                    .map(|(value, _)| value)
+                            })
+                            .transpose()?;
+
+                        if input_attachment_index.is_some() {
+                            let image = match ctx.module.types[ty].inner {
+                                ir::TypeInner::Image {
+                                    dim: ir::ImageDimension::D2,
+                                    arrayed: false,
+                                    class: ir::ImageClass::Sampled { kind, multi: false },
+                                } => ir::TypeInner::Image {
+                                    dim: ir::ImageDimension::SubpassData,
+                                    arrayed: false,
+                                    class: ir::ImageClass::Sampled { kind, multi: false },
+                                },
+                                ir::TypeInner::Image {
+                                    dim: ir::ImageDimension::D2,
+                                    arrayed: false,
+                                    class: ir::ImageClass::Depth { multi: false },
+                                } => ir::TypeInner::Image {
+                                    dim: ir::ImageDimension::SubpassData,
+                                    arrayed: false,
+                                    class: ir::ImageClass::Depth { multi: false },
+                                },
+                                _ => {
+                                    let span = binding
+                                        .input_attachment_index
+                                        .map(|expr| ctx.ast_expressions.get_span(expr))
+                                        .unwrap_or(span);
+                                    return Err(Box::new(Error::BadTexture(span)));
+                                }
+                            };
+                            ty = ctx.ensure_type_exists(None, image);
+                        }
+
                         Some(ir::ResourceBinding {
                             group: self.const_u32(binding.group, &mut ctx.as_const())?.0,
                             binding: self.const_u32(binding.binding, &mut ctx.as_const())?.0,
+                            input_attachment_index,
                         })
                     } else {
                         None
@@ -3434,6 +3474,13 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
                     let image = args.next()?;
                     let image_span = ctx.ast_expressions.get_span(image);
                     let image = self.expression(image, ctx)?;
+                    let is_subpass_data = matches!(
+                        *resolve_inner!(ctx, image),
+                        ir::TypeInner::Image {
+                            dim: ir::ImageDimension::SubpassData,
+                            ..
+                        }
+                    );
 
                     let coordinate = self.expression(args.next()?, ctx)?;
 
@@ -3445,8 +3492,7 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
                         })
                         .transpose()?;
 
-                    let level = class
-                        .is_mipmapped()
+                    let level = (!is_subpass_data && class.is_mipmapped())
                         .then(|| {
                             args.min_args += 1;
                             self.expression(args.next()?, ctx)

@@ -110,15 +110,17 @@ impl Load {
     fn from_image_expr(
         ctx: &mut BlockContext<'_>,
         image_id: Word,
+        image_dim: crate::ImageDimension,
         image_class: crate::ImageClass,
         result_type_id: Word,
     ) -> Result<Load, Error> {
-        let opcode = match image_class {
-            crate::ImageClass::Storage { .. } => spirv::Op::ImageRead,
-            crate::ImageClass::Depth { .. } | crate::ImageClass::Sampled { .. } => {
+        let opcode = match (image_dim, image_class) {
+            (crate::ImageDimension::SubpassData, _) => spirv::Op::ImageRead,
+            (_, crate::ImageClass::Storage { .. }) => spirv::Op::ImageRead,
+            (_, crate::ImageClass::Depth { .. } | crate::ImageClass::Sampled { .. }) => {
                 spirv::Op::ImageFetch
             }
-            crate::ImageClass::External => unimplemented!(),
+            (_, crate::ImageClass::External) => unimplemented!(),
         };
 
         // `OpImageRead` and `OpImageFetch` instructions produce vec4<f32>
@@ -732,19 +734,31 @@ impl BlockContext<'_> {
     ) -> Result<Word, Error> {
         let image_id = self.get_handle_id(image);
         let image_type = self.fun_info[image].ty.inner_with(&self.ir_module.types);
-        let image_class = match *image_type {
-            crate::TypeInner::Image { class, .. } => class,
+        let (image_dim, image_class) = match *image_type {
+            crate::TypeInner::Image { dim, class, .. } => (dim, class),
             _ => return Err(Error::Validation("image type")),
         };
 
-        let access = Load::from_image_expr(self, image_id, image_class, result_type_id)?;
+        let access = Load::from_image_expr(self, image_id, image_dim, image_class, result_type_id)?;
         let coordinates = self.write_image_coordinates(coordinate, array_index, block)?;
 
-        let level_id = level.map(|expr| self.cached[expr]);
-        let sample_id = sample.map(|expr| self.cached[expr]);
+        let (level_id, sample_id) = if image_dim == crate::ImageDimension::SubpassData {
+            (None, None)
+        } else {
+            (
+                level.map(|expr| self.cached[expr]),
+                sample.map(|expr| self.cached[expr]),
+            )
+        };
+
+        let bounds_check_policy = if image_dim == crate::ImageDimension::SubpassData {
+            crate::proc::BoundsCheckPolicy::Unchecked
+        } else {
+            self.writer.bounds_check_policies.image_load
+        };
 
         // Perform the access, according to the bounds check policy.
-        let access_id = match self.writer.bounds_check_policies.image_load {
+        let access_id = match bounds_check_policy {
             crate::proc::BoundsCheckPolicy::Restrict => {
                 let (coords, level_id, sample_id) = self.write_restricted_coordinates(
                     image_id,
@@ -1140,10 +1154,14 @@ impl BlockContext<'_> {
 
         let id = match query {
             Iq::Size { level } => {
+                if dim == Id::SubpassData {
+                    return Err(Error::Validation("image query size on subpass data"));
+                }
                 let dim_coords = match dim {
                     Id::D1 => 1,
                     Id::D2 | Id::Cube => 2,
                     Id::D3 => 3,
+                    Id::SubpassData => unreachable!(),
                 };
                 let array_coords = usize::from(arrayed);
                 let vector_size = match dim_coords + array_coords {
@@ -1223,7 +1241,7 @@ impl BlockContext<'_> {
             Iq::NumLayers => {
                 let vec_size = match dim {
                     Id::D1 => crate::VectorSize::Bi,
-                    Id::D2 | Id::Cube => crate::VectorSize::Tri,
+                    Id::D2 | Id::Cube | Id::SubpassData => crate::VectorSize::Tri,
                     Id::D3 => crate::VectorSize::Quad,
                 };
                 let extended_size_type_id = self.get_numeric_type_id(NumericType::Vector {

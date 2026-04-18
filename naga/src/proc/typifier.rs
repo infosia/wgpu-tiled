@@ -537,7 +537,9 @@ impl<'a> ResolveContext<'a> {
                 crate::ImageQuery::Size { level: _ } => match *past(image)?.inner_with(types) {
                     Ti::Image { dim, .. } => match dim {
                         crate::ImageDimension::D1 => Ti::Scalar(crate::Scalar::U32),
-                        crate::ImageDimension::D2 | crate::ImageDimension::Cube => Ti::Vector {
+                        crate::ImageDimension::D2
+                        | crate::ImageDimension::Cube
+                        | crate::ImageDimension::SubpassData => Ti::Vector {
                             size: crate::VectorSize::Bi,
                             scalar: crate::Scalar::U32,
                         },

@@ -253,6 +253,7 @@ pub enum Binding<'a> {
 pub struct ResourceBinding<'a> {
     pub group: Handle<Expression<'a>>,
     pub binding: Handle<Expression<'a>>,
+    pub input_attachment_index: Option<Handle<Expression<'a>>>,
 }
 
 #[derive(Debug)]

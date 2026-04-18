@@ -472,6 +472,7 @@ pub fn backends(ctx: BenchmarkContext) -> anyhow::Result<Vec<SubBenchResult>> {
                 writer_flags: naga::back::glsl::WriterFlags::empty(),
                 binding_map: Default::default(),
                 zero_initialize_workgroup_memory: true,
+                use_framebuffer_fetch: false,
             };
             for input in &inputs.inner {
                 if !input.options.targets.unwrap().contains(Targets::GLSL) {

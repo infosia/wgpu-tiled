@@ -2126,7 +2126,7 @@ impl Frontend {
         {
             let image_size = match dim {
                 Dim::D1 => None,
-                Dim::D2 => Some(VectorSize::Bi),
+                Dim::D2 | Dim::SubpassData => Some(VectorSize::Bi),
                 Dim::D3 => Some(VectorSize::Tri),
                 Dim::Cube => Some(VectorSize::Tri),
             };

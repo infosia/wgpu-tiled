@@ -1,0 +1,4 @@
+targets = "GLSL"
+
+[glsl]
+use_framebuffer_fetch = true

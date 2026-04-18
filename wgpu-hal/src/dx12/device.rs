@@ -1072,6 +1072,7 @@ impl crate::Device for super::Device {
                         naga::ResourceBinding {
                             group: index as u32,
                             binding: entry.binding,
+                            input_attachment_index: None,
                         },
                         bind_target,
                     );
@@ -1133,6 +1134,7 @@ impl crate::Device for super::Device {
                         naga::ResourceBinding {
                             group: index as u32,
                             binding: entry.binding,
+                            input_attachment_index: None,
                         },
                         hlsl::BindTarget {
                             binding_array_size,
@@ -1159,6 +1161,7 @@ impl crate::Device for super::Device {
                         naga::ResourceBinding {
                             group: index as u32,
                             binding: entry.binding,
+                            input_attachment_index: None,
                         },
                         hlsl::BindTarget {
                             // Naga does not use the space field for samplers
@@ -1222,6 +1225,7 @@ impl crate::Device for super::Device {
                     naga::ResourceBinding {
                         group: index as u32,
                         binding: entry.binding,
+                        input_attachment_index: None,
                     },
                     hlsl::BindTarget {
                         binding_array_size: entry.count.map(NonZeroU32::get),

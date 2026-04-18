@@ -679,8 +679,10 @@ impl super::Adapter {
             wgt::Features::TRANSIENT_ATTACHMENTS | wgt::Features::MULTI_SUBPASS,
             false,
         );
-        // TODO(Phase 10): enable once naga GLSL framebuffer-fetch codegen lands.
-        features.set(wgt::Features::FRAMEBUFFER_FETCH, false);
+        features.set(
+            wgt::Features::FRAMEBUFFER_FETCH,
+            private_caps.contains(super::PrivateCapabilities::SHADER_FRAMEBUFFER_FETCH),
+        );
 
         // GLSL ES 3.10+ / GLSL 4.30+ natively support coherent/volatile qualifiers
         // on storage buffers. These were introduced alongside storage buffer support.

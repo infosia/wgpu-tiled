@@ -338,6 +338,9 @@ pub struct Options {
     pub binding_map: BindingMap,
     /// Should workgroup variables be zero initialized (by polyfilling)?
     pub zero_initialize_workgroup_memory: bool,
+    /// Emit `GL_EXT_shader_framebuffer_fetch`-style `inout` globals for
+    /// subpass input attachments in fragment shaders.
+    pub use_framebuffer_fetch: bool,
 }
 
 impl Default for Options {
@@ -347,6 +350,7 @@ impl Default for Options {
             writer_flags: WriterFlags::ADJUST_COORDINATE_SPACE,
             binding_map: BindingMap::default(),
             zero_initialize_workgroup_memory: true,
+            use_framebuffer_fetch: false,
         }
     }
 }

@@ -143,6 +143,12 @@ impl<'a, W: Write> Writer<'a, W> {
         // extensions to appear before being used, even though extensions are part of the
         // preprocessor not the processor ¯\_(ツ)_/¯
         self.features.write(self.options, &mut self.out)?;
+        if self.options.use_framebuffer_fetch && self.entry_point.stage == ShaderStage::Fragment {
+            writeln!(
+                self.out,
+                "#extension GL_EXT_shader_framebuffer_fetch : require"
+            )?;
+        }
 
         // glsl es requires a precision to be specified for floats and ints
         // TODO: Should this be user configurable?
@@ -349,24 +355,51 @@ impl<'a, W: Write> Writer<'a, W> {
                     // Gether the location if needed
                     let layout_binding = if self.options.version.supports_explicit_locations() {
                         let br = global.binding.as_ref().unwrap();
-                        self.options.binding_map.get(br).cloned()
+                        self.lookup_resource_binding(br).cloned()
                     } else {
                         None
                     };
+                    let input_attachment_index = global
+                        .binding
+                        .as_ref()
+                        .and_then(|binding| binding.input_attachment_index);
+                    let use_framebuffer_fetch =
+                        self.is_framebuffer_fetch_subpass_image(dim, class, input_attachment_index);
+
+                    if use_framebuffer_fetch {
+                        write!(self.out, "inout ")?;
+                        self.write_framebuffer_fetch_type(class)?;
+                        let global_name = self.get_global_name(handle, global);
+                        writeln!(self.out, " {global_name};")?;
+                        writeln!(self.out)?;
+                        self.reflection_names_globals.insert(handle, global_name);
+                        continue;
+                    }
 
                     // Write all the layout qualifiers
-                    if layout_binding.is_some() || storage_format_access.is_some() {
+                    if layout_binding.is_some()
+                        || storage_format_access.is_some()
+                        || input_attachment_index.is_some()
+                    {
                         write!(self.out, "layout(")?;
+                        let mut needs_separator = false;
                         if let Some(binding) = layout_binding {
                             write!(self.out, "binding = {binding}")?;
+                            needs_separator = true;
+                        }
+                        if let Some(index) = input_attachment_index {
+                            if needs_separator {
+                                write!(self.out, ", ")?;
+                            }
+                            write!(self.out, "input_attachment_index = {index}")?;
+                            needs_separator = true;
                         }
                         if let Some((format, _)) = storage_format_access {
                             let format_str = glsl_storage_format(format)?;
-                            let separator = match layout_binding {
-                                Some(_) => ",",
-                                None => "",
-                            };
-                            write!(self.out, "{separator}{format_str}")?;
+                            if needs_separator {
+                                write!(self.out, ", ")?;
+                            }
+                            write!(self.out, "{format_str}")?;
                         }
                         write!(self.out, ") ")?;
                     }
@@ -563,6 +596,45 @@ impl<'a, W: Write> Writer<'a, W> {
         }
     }
 
+    fn lookup_resource_binding(&self, binding: &crate::ResourceBinding) -> Option<&u8> {
+        self.options.binding_map.get(binding).or_else(|| {
+            binding.input_attachment_index.and_then(|_| {
+                let plain_binding = crate::ResourceBinding {
+                    group: binding.group,
+                    binding: binding.binding,
+                    input_attachment_index: None,
+                };
+                self.options.binding_map.get(&plain_binding)
+            })
+        })
+    }
+
+    fn is_framebuffer_fetch_subpass_image(
+        &self,
+        dim: crate::ImageDimension,
+        class: crate::ImageClass,
+        input_attachment_index: Option<u32>,
+    ) -> bool {
+        self.options.use_framebuffer_fetch
+            && self.entry_point.stage == ShaderStage::Fragment
+            && dim == crate::ImageDimension::SubpassData
+            && input_attachment_index.is_some()
+            && matches!(class, crate::ImageClass::Sampled { multi: false, .. })
+    }
+
+    fn write_framebuffer_fetch_type(&mut self, class: crate::ImageClass) -> BackendResult {
+        match class {
+            crate::ImageClass::Sampled { kind, multi: false } => {
+                let prefix = glsl_scalar(crate::Scalar { kind, width: 4 })?.prefix;
+                write!(self.out, "{prefix}vec4")?;
+                Ok(())
+            }
+            _ => Err(Error::Custom(
+                "Framebuffer fetch globals must be non-multisampled sampled images".to_string(),
+            )),
+        }
+    }
+
     /// Helper method to write a image type
     ///
     /// # Notes
@@ -573,6 +645,31 @@ impl<'a, W: Write> Writer<'a, W> {
         arrayed: bool,
         class: crate::ImageClass,
     ) -> BackendResult {
+        if dim == crate::ImageDimension::SubpassData {
+            return match class {
+                crate::ImageClass::Sampled { kind, multi } => {
+                    let prefix = glsl_scalar(crate::Scalar { kind, width: 4 })?.prefix;
+                    if multi {
+                        write!(self.out, "{prefix}subpassInputMS")?;
+                    } else {
+                        write!(self.out, "{prefix}subpassInput")?;
+                    }
+                    Ok(())
+                }
+                crate::ImageClass::Depth { multi } => {
+                    if multi {
+                        write!(self.out, "subpassInputMS")?;
+                    } else {
+                        write!(self.out, "subpassInput")?;
+                    }
+                    Ok(())
+                }
+                crate::ImageClass::Storage { .. } | crate::ImageClass::External => Err(
+                    Error::Custom("SubpassData images must be sampled or depth".to_string()),
+                ),
+            };
+        }
+
         // glsl images consist of four parts the scalar prefix, the image "type", the dimensions
         // and modifiers
         //
@@ -655,7 +752,7 @@ impl<'a, W: Write> Writer<'a, W> {
         // if we have it
         if self.options.version.supports_explicit_locations() {
             if let Some(ref br) = global.binding {
-                match self.options.binding_map.get(br) {
+                match self.lookup_resource_binding(br).copied() {
                     Some(binding) => {
                         write!(self.out, "layout(")?;
 
@@ -2700,11 +2797,17 @@ impl<'a, W: Write> Writer<'a, W> {
                     } => (dim, class),
                     _ => unreachable!(),
                 };
+                if dim == crate::ImageDimension::SubpassData {
+                    return Err(Error::Custom(
+                        "ImageQuery on SubpassData is not supported in GLSL".to_string(),
+                    ));
+                }
                 let components = match dim {
                     crate::ImageDimension::D1 => 1,
                     crate::ImageDimension::D2 => 2,
                     crate::ImageDimension::D3 => 3,
                     crate::ImageDimension::Cube => 2,
+                    crate::ImageDimension::SubpassData => unreachable!(),
                 };
 
                 if let crate::ImageQuery::Size { .. } = query {
@@ -3835,7 +3938,7 @@ impl<'a, W: Write> Writer<'a, W> {
         // Get how many components the coordinate vector needs for the dimensions only
         let tex_coord_size = match dim {
             crate::ImageDimension::D1 => 1,
-            crate::ImageDimension::D2 => 2,
+            crate::ImageDimension::D2 | crate::ImageDimension::SubpassData => 2,
             crate::ImageDimension::D3 => 3,
             crate::ImageDimension::Cube => 2,
         };
@@ -4050,6 +4153,12 @@ impl<'a, W: Write> Writer<'a, W> {
         // and the policy to be used with it.
         let (fun_name, policy) = match class {
             // Sampled images inherit the policy from the user passed policies
+            crate::ImageClass::Sampled { .. } if dim == crate::ImageDimension::SubpassData => {
+                ("subpassLoad", proc::BoundsCheckPolicy::Unchecked)
+            }
+            crate::ImageClass::Depth { .. } if dim == crate::ImageDimension::SubpassData => {
+                ("subpassLoad", proc::BoundsCheckPolicy::Unchecked)
+            }
             crate::ImageClass::Sampled { .. } => ("texelFetch", self.policies.image_load),
             crate::ImageClass::Storage { .. } => {
                 // OpenGL ES 3.1 mentions in Chapter "8.22 Texture Image Loads and Stores" that:
@@ -4075,6 +4184,23 @@ impl<'a, W: Write> Writer<'a, W> {
             }
             crate::ImageClass::External => unimplemented!(),
         };
+
+        if dim == crate::ImageDimension::SubpassData {
+            if self.options.use_framebuffer_fetch
+                && self.entry_point.stage == ShaderStage::Fragment
+                && matches!(class, crate::ImageClass::Sampled { multi: false, .. })
+            {
+                self.write_expr(image, ctx)?;
+            } else {
+                write!(self.out, "{fun_name}(")?;
+                self.write_expr(image, ctx)?;
+                write!(self.out, ")")?;
+                if matches!(class, crate::ImageClass::Depth { .. }) {
+                    write!(self.out, ".x")?;
+                }
+            }
+            return Ok(());
+        }
 
         // openGL es doesn't have 1D images so we need workaround it
         let tex_1d_hack = dim == IDim::D1 && self.options.version.is_es();

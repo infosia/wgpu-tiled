@@ -105,6 +105,7 @@
             binding: Some((
                 group: 0,
                 binding: 0,
+                input_attachment_index: None,
             )),
             ty: 1,
             init: None,

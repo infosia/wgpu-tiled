@@ -912,6 +912,7 @@ impl crate::Device for super::Device {
                     let br = naga::ResourceBinding {
                         group: group_index as u32,
                         binding: entry.binding,
+                        input_attachment_index: None,
                     };
                     info.resources.insert(br, target);
                 }

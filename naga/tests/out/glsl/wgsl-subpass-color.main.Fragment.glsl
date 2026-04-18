@@ -1,0 +1,15 @@
+#version 310 es
+
+precision highp float;
+precision highp int;
+
+layout(input_attachment_index = 0) uniform subpassInput _group_0_binding_0_fs;
+
+layout(location = 0) out vec4 _fs2p_location0;
+
+void main() {
+    vec4 _e4 = subpassLoad(_group_0_binding_0_fs);
+    _fs2p_location0 = _e4;
+    return;
+}
+

@@ -712,6 +712,8 @@ pub enum ImageDimension {
     D3,
     /// Cube map
     Cube,
+    /// Subpass input attachment image.
+    SubpassData,
 }
 
 bitflags::bitflags! {
@@ -1169,6 +1171,8 @@ pub struct ResourceBinding {
     pub group: u32,
     /// Binding number within the group.
     pub binding: u32,
+    /// Input attachment index for subpass-data images.
+    pub input_attachment_index: Option<u32>,
 }
 
 /// Variable defined at module level.

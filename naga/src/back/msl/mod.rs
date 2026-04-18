@@ -599,8 +599,18 @@ impl Options {
         ep: &crate::EntryPoint,
         res_binding: &crate::ResourceBinding,
     ) -> Option<&BindTarget> {
-        self.get_entry_point_resources(ep)
-            .and_then(|res| res.resources.get(res_binding))
+        self.get_entry_point_resources(ep).and_then(|res| {
+            res.resources.get(res_binding).or_else(|| {
+                res_binding.input_attachment_index.and_then(|_| {
+                    let plain_binding = crate::ResourceBinding {
+                        group: res_binding.group,
+                        binding: res_binding.binding,
+                        input_attachment_index: None,
+                    };
+                    res.resources.get(&plain_binding)
+                })
+            })
+        })
     }
 
     fn resolve_resource_binding(
@@ -608,6 +618,13 @@ impl Options {
         ep: &crate::EntryPoint,
         res_binding: &crate::ResourceBinding,
     ) -> Result<ResolvedBinding, EntryPointError> {
+        if let Some(input_attachment_index) = res_binding.input_attachment_index {
+            return Ok(ResolvedBinding::Color {
+                location: input_attachment_index,
+                blend_src: None,
+            });
+        }
+
         let target = self.get_resource_binding_target(ep, res_binding);
         match target {
             Some(target) => Ok(ResolvedBinding::Resource(target.clone())),

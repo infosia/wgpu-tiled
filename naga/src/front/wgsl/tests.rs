@@ -657,6 +657,64 @@ fn parse_storage_buffers() {
 }
 
 #[test]
+fn parse_input_attachment_index_binding() {
+    let module = parse_str(
+        "
+        @group(0) @binding(1) @input_attachment_index(3)
+        var gbuffer: texture_2d<f32>;
+        ",
+    )
+    .unwrap();
+
+    let (_, global) = module.global_variables.iter().next().unwrap();
+    let binding = global.binding.unwrap();
+    assert_eq!(binding.group, 0);
+    assert_eq!(binding.binding, 1);
+    assert_eq!(binding.input_attachment_index, Some(3));
+    assert!(matches!(
+        module.types[global.ty].inner,
+        crate::TypeInner::Image {
+            dim: crate::ImageDimension::SubpassData,
+            arrayed: false,
+            class: crate::ImageClass::Sampled { multi: false, .. },
+        }
+    ));
+}
+
+#[test]
+fn parse_input_attachment_index_requires_texture_2d() {
+    use crate::front::wgsl::{error::Error, Frontend};
+
+    let shader = "
+        @group(0) @binding(0) @input_attachment_index(0)
+        var<uniform> value: u32;
+    ";
+    let result = Frontend::new().inner(shader);
+    assert!(matches!(*result.unwrap_err(), Error::BadTexture(_)));
+}
+
+#[test]
+fn parse_input_attachment_texture_load_without_level() {
+    let module = parse_str(
+        "
+        @group(0) @binding(0) @input_attachment_index(0)
+        var gbuffer: texture_2d<f32>;
+
+        @fragment
+        fn main() -> @location(0) vec4<f32> {
+            return textureLoad(gbuffer, vec2<i32>(0, 0));
+        }
+        ",
+    )
+    .unwrap();
+
+    let expressions = &&module.entry_points[0].function.expressions;
+    assert!(expressions.iter().any(|(_, expression)| {
+        matches!(expression, crate::Expression::ImageLoad { level: None, .. })
+    }));
+}
+
+#[test]
 fn parse_alias() {
     parse_str(
         "
@@ -744,6 +802,7 @@ fn parse_repeated_attributes() {
         ("group(0)", template_resource),
         ("interpolate(flat)", template_vs),
         ("invariant", template_vs),
+        ("input_attachment_index(0)", template_resource),
         ("location(0)", template_vs),
         ("size(16)", template_struct),
         ("vertex", template_stage),

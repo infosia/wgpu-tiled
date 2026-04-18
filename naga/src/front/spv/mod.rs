@@ -175,7 +175,9 @@ impl crate::ImageDimension {
     const fn required_coordinate_size(&self) -> Option<crate::VectorSize> {
         match *self {
             crate::ImageDimension::D1 => None,
-            crate::ImageDimension::D2 => Some(crate::VectorSize::Bi),
+            crate::ImageDimension::D2 | crate::ImageDimension::SubpassData => {
+                Some(crate::VectorSize::Bi)
+            }
             crate::ImageDimension::D3 => Some(crate::VectorSize::Tri),
             crate::ImageDimension::Cube => Some(crate::VectorSize::Tri),
         }
@@ -232,6 +234,7 @@ struct Decoration {
     index: Option<spirv::Word>,
     desc_set: Option<spirv::Word>,
     desc_index: Option<spirv::Word>,
+    input_attachment_index: Option<spirv::Word>,
     specialization_constant_id: Option<spirv::Word>,
     storage_buffer: bool,
     offset: Option<spirv::Word>,
@@ -257,8 +260,13 @@ impl Decoration {
             Decoration {
                 desc_set: Some(group),
                 desc_index: Some(binding),
+                input_attachment_index,
                 ..
-            } => Some(crate::ResourceBinding { group, binding }),
+            } => Some(crate::ResourceBinding {
+                group,
+                binding,
+                input_attachment_index,
+            }),
             _ => None,
         }
     }
@@ -786,6 +794,10 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
             spirv::Decoration::Binding => {
                 inst.expect(base_words + 2)?;
                 dec.desc_index = Some(self.next()?);
+            }
+            spirv::Decoration::InputAttachmentIndex => {
+                inst.expect(base_words + 2)?;
+                dec.input_attachment_index = Some(self.next()?);
             }
             spirv::Decoration::BufferBlock => {
                 dec.storage_buffer = true;
@@ -2659,7 +2671,9 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
             .ok_or(Error::InvalidImageBaseType(base_handle))?;
 
         let inner = crate::TypeInner::Image {
-            class: if is_depth == 1 {
+            class: if dim == crate::ImageDimension::SubpassData {
+                crate::ImageClass::Sampled { kind, multi: false }
+            } else if is_depth == 1 {
                 if is_sampled == 2 {
                     return Err(Error::InvalidImageDepthStorage);
                 }

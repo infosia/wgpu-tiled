@@ -675,7 +675,9 @@ impl Resource {
                 let view_dimension = match dim {
                     naga::ImageDimension::D1 => wgt::TextureViewDimension::D1,
                     naga::ImageDimension::D2 if arrayed => wgt::TextureViewDimension::D2Array,
-                    naga::ImageDimension::D2 => wgt::TextureViewDimension::D2,
+                    naga::ImageDimension::D2 | naga::ImageDimension::SubpassData => {
+                        wgt::TextureViewDimension::D2
+                    }
                     naga::ImageDimension::D3 => wgt::TextureViewDimension::D3,
                     naga::ImageDimension::Cube if arrayed => wgt::TextureViewDimension::CubeArray,
                     naga::ImageDimension::Cube => wgt::TextureViewDimension::Cube,

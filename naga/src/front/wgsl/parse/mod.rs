@@ -1840,8 +1840,11 @@ impl Parser {
         let mut shader_stage_error_span = Span::new(0, 0);
         let mut workgroup_size = ParsedAttribute::default();
         let mut early_depth_test = ParsedAttribute::default();
-        let (mut bind_index, mut bind_group) =
-            (ParsedAttribute::default(), ParsedAttribute::default());
+        let (mut bind_index, mut bind_group, mut input_attachment_index) = (
+            ParsedAttribute::default(),
+            ParsedAttribute::default(),
+            ParsedAttribute::default(),
+        );
         let mut id = ParsedAttribute::default();
         // the payload variable for a mesh shader
         let mut payload = ParsedAttribute::default();
@@ -1892,6 +1895,12 @@ impl Parser {
                 "group" => {
                     lexer.expect(Token::Paren('('))?;
                     bind_group.set(self.expression(lexer, &mut ctx)?, name_span)?;
+                    lexer.next_if(Token::Separator(','));
+                    lexer.expect(Token::Paren(')'))?;
+                }
+                "input_attachment_index" => {
+                    lexer.expect(Token::Paren('('))?;
+                    input_attachment_index.set(self.expression(lexer, &mut ctx)?, name_span)?;
                     lexer.next_if(Token::Separator(','));
                     lexer.expect(Token::Paren(')'))?;
                 }
@@ -2030,18 +2039,25 @@ impl Parser {
         }
 
         let attrib_span = self.pop_rule_span(lexer);
-        match (bind_group.value, bind_index.value) {
-            (Some(group), Some(index)) => {
+        match (
+            bind_group.value,
+            bind_index.value,
+            input_attachment_index.value,
+        ) {
+            (Some(group), Some(index), input_attachment_index) => {
                 binding = Some(ast::ResourceBinding {
                     group,
                     binding: index,
+                    input_attachment_index,
                 });
             }
-            (Some(_), None) => {
+            (Some(_), None, _) => {
                 return Err(Box::new(Error::MissingAttribute("binding", attrib_span)))
             }
-            (None, Some(_)) => return Err(Box::new(Error::MissingAttribute("group", attrib_span))),
-            (None, None) => {}
+            (None, Some(_), _) | (None, None, Some(_)) => {
+                return Err(Box::new(Error::MissingAttribute("group", attrib_span)))
+            }
+            (None, None, None) => {}
         }
 
         // read item

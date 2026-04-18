@@ -1,0 +1,52 @@
+; SPIR-V
+; Version: 1.1
+; Generator: rspirv
+; Bound: 31
+OpCapability Shader
+%1 = OpExtInstImport "GLSL.std.450"
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %15 "main" %13
+OpExecutionMode %15 OriginUpperLeft
+OpDecorate %8 DescriptorSet 0
+OpDecorate %8 Binding 0
+OpDecorate %8 InputAttachmentIndex 0
+OpDecorate %10 DescriptorSet 0
+OpDecorate %10 Binding 1
+OpDecorate %10 InputAttachmentIndex 1
+OpDecorate %11 DescriptorSet 0
+OpDecorate %11 Binding 2
+OpDecorate %11 InputAttachmentIndex 2
+OpDecorate %13 Location 0
+%2 = OpTypeVoid
+%4 = OpTypeFloat 32
+%3 = OpTypeImage %4 SubpassData 0 0 0 2 Unknown
+%5 = OpTypeVector %4 4
+%7 = OpTypeInt 32 1
+%6 = OpTypeVector %7 2
+%9 = OpTypePointer UniformConstant %3
+%8 = OpVariable  %9  UniformConstant
+%10 = OpVariable  %9  UniformConstant
+%11 = OpVariable  %9  UniformConstant
+%14 = OpTypePointer Output %5
+%13 = OpVariable  %14  Output
+%16 = OpTypeFunction %2
+%20 = OpConstant  %7  0
+%21 = OpConstantComposite  %6  %20 %20
+%22 = OpConstant  %4  3
+%23 = OpConstantComposite  %5  %22 %22 %22 %22
+%15 = OpFunction  %2  None %16
+%12 = OpLabel
+%17 = OpLoad  %3  %8
+%18 = OpLoad  %3  %10
+%19 = OpLoad  %3  %11
+OpBranch %24
+%24 = OpLabel
+%25 = OpImageRead  %5  %17 %21
+%26 = OpImageRead  %5  %18 %21
+%27 = OpImageRead  %5  %19 %21
+%28 = OpFAdd  %5  %25 %26
+%29 = OpFAdd  %5  %28 %27
+%30 = OpFDiv  %5  %29 %23
+OpStore %13 %30
+OpReturn
+OpFunctionEnd

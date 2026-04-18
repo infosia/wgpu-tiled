@@ -296,7 +296,7 @@ impl crate::ImageDimension {
     const fn to_hlsl_str(self) -> &'static str {
         match self {
             Self::D1 => "1D",
-            Self::D2 => "2D",
+            Self::D2 | Self::SubpassData => "2D",
             Self::D3 => "3D",
             Self::Cube => "Cube",
         }

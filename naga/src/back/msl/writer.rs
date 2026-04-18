@@ -296,11 +296,34 @@ impl Display for TypeContext<'_> {
                 arrayed,
                 class,
             } => {
+                if dim == crate::ImageDimension::SubpassData {
+                    match class {
+                        crate::ImageClass::Sampled { kind, .. } => {
+                            put_numeric_type(
+                                out,
+                                crate::Scalar { kind, width: 4 },
+                                &[crate::VectorSize::Quad],
+                            )?;
+                        }
+                        crate::ImageClass::Depth { .. } => {
+                            put_numeric_type(out, crate::Scalar::F32, &[])?;
+                        }
+                        crate::ImageClass::Storage { format, .. } => {
+                            put_numeric_type(out, format.into(), &[crate::VectorSize::Quad])?;
+                        }
+                        crate::ImageClass::External => {
+                            put_numeric_type(out, crate::Scalar::F32, &[crate::VectorSize::Quad])?;
+                        }
+                    }
+                    return Ok(());
+                }
+
                 let dim_str = match dim {
                     crate::ImageDimension::D1 => "1d",
                     crate::ImageDimension::D2 => "2d",
                     crate::ImageDimension::D3 => "3d",
                     crate::ImageDimension::Cube => "cube",
+                    crate::ImageDimension::SubpassData => unreachable!(),
                 };
                 let (texture_str, msaa_str, scalar, access) = match class {
                     crate::ImageClass::Sampled { kind, multi } => {
@@ -1168,6 +1191,13 @@ impl<W: Write> Writer<W> {
                 self.put_image_query(image, "height", level, context)?;
                 write!(self.out, ")")?;
             }
+            crate::ImageDimension::SubpassData => {
+                write!(self.out, "{NAMESPACE}::{coordinate_type}2(")?;
+                self.put_image_query(image, "width", level, context)?;
+                write!(self.out, ", ")?;
+                self.put_image_query(image, "height", level, context)?;
+                write!(self.out, ")")?;
+            }
             crate::ImageDimension::D3 => {
                 write!(self.out, "{NAMESPACE}::{coordinate_type}3(")?;
                 self.put_image_query(image, "width", level, context)?;
@@ -1395,6 +1425,15 @@ impl<W: Write> Writer<W> {
         mut address: TexelAddress,
         context: &ExpressionContext,
     ) -> BackendResult {
+        if let crate::TypeInner::Image {
+            dim: crate::ImageDimension::SubpassData,
+            ..
+        } = *context.resolve_type(image)
+        {
+            self.put_expression(image, context, false)?;
+            return Ok(());
+        }
+
         if let crate::TypeInner::Image {
             class: crate::ImageClass::External,
             ..

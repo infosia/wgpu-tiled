@@ -520,7 +520,18 @@ impl Writer {
         &self,
         res_binding: &crate::ResourceBinding,
     ) -> Result<BindingInfo, Error> {
-        match self.binding_map.get(res_binding) {
+        let target = self.binding_map.get(res_binding).or_else(|| {
+            res_binding.input_attachment_index.and_then(|_| {
+                let plain_binding = crate::ResourceBinding {
+                    group: res_binding.group,
+                    binding: res_binding.binding,
+                    input_attachment_index: None,
+                };
+                self.binding_map.get(&plain_binding)
+            })
+        });
+
+        match target {
             Some(target) => Ok(*target),
             None if self.fake_missing_bindings => Ok(BindingInfo {
                 descriptor_set: res_binding.group,
@@ -3334,6 +3345,13 @@ impl Writer {
             let bind_target = self.resolve_resource_binding(res_binding)?;
             self.decorate(id, Decoration::DescriptorSet, &[bind_target.descriptor_set]);
             self.decorate(id, Decoration::Binding, &[bind_target.binding]);
+            if let Some(input_attachment_index) = res_binding.input_attachment_index {
+                self.decorate(
+                    id,
+                    Decoration::InputAttachmentIndex,
+                    &[input_attachment_index],
+                );
+            }
 
             if let Some(remapped_binding_array_size) = bind_target.binding_array_size {
                 if let crate::TypeInner::BindingArray { base, .. } =

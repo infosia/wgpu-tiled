@@ -84,6 +84,7 @@
             binding: Some((
                 group: 0,
                 binding: 0,
+                input_attachment_index: None,
             )),
             ty: 0,
             init: None,
@@ -95,6 +96,7 @@
             binding: Some((
                 group: 0,
                 binding: 1,
+                input_attachment_index: None,
             )),
             ty: 1,
             init: None,
@@ -106,6 +108,7 @@
             binding: Some((
                 group: 0,
                 binding: 2,
+                input_attachment_index: None,
             )),
             ty: 2,
             init: None,
@@ -117,6 +120,7 @@
             binding: Some((
                 group: 1,
                 binding: 0,
+                input_attachment_index: None,
             )),
             ty: 3,
             init: None,
@@ -128,6 +132,7 @@
             binding: Some((
                 group: 1,
                 binding: 1,
+                input_attachment_index: None,
             )),
             ty: 4,
             init: None,
@@ -139,6 +144,7 @@
             binding: Some((
                 group: 1,
                 binding: 2,
+                input_attachment_index: None,
             )),
             ty: 5,
             init: None,

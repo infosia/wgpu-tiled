@@ -670,7 +670,7 @@ impl<W: Write> super::Writer<'_, W> {
                     ImageQuery::Size | ImageQuery::SizeLevel => {
                         let ret = match wiq.dim {
                             IDim::D1 => "x",
-                            IDim::D2 => "xy",
+                            IDim::D2 | IDim::SubpassData => "xy",
                             IDim::D3 => "xyz",
                             IDim::Cube => "xy",
                         };

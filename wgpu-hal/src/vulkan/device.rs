@@ -1838,6 +1838,7 @@ impl crate::Device for super::Device {
                     naga::ResourceBinding {
                         group: group as u32,
                         binding,
+                        input_attachment_index: None,
                     },
                     naga::back::spv::BindingInfo {
                         descriptor_set: group as u32,

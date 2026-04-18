@@ -1338,6 +1338,7 @@ impl crate::Device for super::Device {
                 let br = naga::ResourceBinding {
                     group: group_index as u32,
                     binding: entry.binding,
+                    input_attachment_index: None,
                 };
                 binding_map.insert(br, *counter);
                 *counter += entry.count.map_or(1, |c| c.get() as u8);
@@ -1358,6 +1359,10 @@ impl crate::Device for super::Device {
                 writer_flags,
                 binding_map,
                 zero_initialize_workgroup_memory: true,
+                use_framebuffer_fetch: self
+                    .shared
+                    .private_caps
+                    .contains(PrivateCapabilities::SHADER_FRAMEBUFFER_FETCH),
             },
         })
     }
