@@ -1159,7 +1159,14 @@ pub struct SubpassTargetDesc {
     pub color_attachment_indices: alloc::vec::Vec<u32>,
     /// Whether this subpass uses depth/stencil.
     pub uses_depth_stencil: bool,
-    /// Input attachment indices read by this subpass.
+    ///
+    /// Each entry is either:
+    /// - a color attachment slot index into [`SubpassTarget::color_attachment_formats`], or
+    /// - `u32::MAX`, which denotes the render pass depth/stencil attachment.
+    ///
+    /// Entries are ordered by the consuming subpass's input-attachment binding order.
+    /// Backend note: Metal interprets WGSL `@input_attachment_index(N)` literally as
+    /// framebuffer color slot `N`.
     pub input_attachment_indices: alloc::vec::Vec<u32>,
 }
 

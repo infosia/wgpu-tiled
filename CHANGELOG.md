@@ -67,6 +67,14 @@ Bottom level categories:
 
 - Added a headless `wgpu-gpu` deferred subpass smoke test module (`deferred_rendering`) that now runs green on Vulkan and Metal without backend-specific expected-failure markers.
 
+### Changes
+
+#### General
+
+- `SubpassTargetDesc::input_attachment_indices` now encodes render-pass color attachment slots, with `u32::MAX` reserved for depth/stencil input attachments.
+- Updated subpass-target validation and compatibility checks for the slot-based input-attachment convention, including explicit validation errors for out-of-range input slots and depth-input usage without a declared depth/stencil format.
+- Fixed Vulkan subpass-input remapping in both pipeline compatibility key generation and render-pass command keying so non-zero producer color slots are preserved correctly.
+
 ## v29.0.1 (2026-03-26)
 
 This release includes `wgpu-core`, `wgpu-hal` and `wgpu-types` version `29.0.1`. All other crates remain at their previous versions.

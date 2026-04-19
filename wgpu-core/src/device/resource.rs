@@ -4972,13 +4972,25 @@ impl Device {
             );
         }
 
+        let color_attachment_count = subpass_target.color_attachment_formats.len() as u32;
         for (subpass, desc) in subpass_target.subpass_descs.iter().enumerate() {
-            for &input_subpass in &desc.input_attachment_indices {
-                if input_subpass >= subpass as u32 {
+            for &input_attachment_index in &desc.input_attachment_indices {
+                if input_attachment_index == u32::MAX {
+                    if subpass_target.depth_stencil_format.is_none() {
+                        return Err(
+                            pipeline::CreateRenderPipelineError::SubpassTargetDepthInputWithoutDepthStencil {
+                                subpass: subpass as u32,
+                            },
+                        );
+                    }
+                    continue;
+                }
+                if input_attachment_index >= color_attachment_count {
                     return Err(
-                        pipeline::CreateRenderPipelineError::SubpassTargetInputAttachmentReferencesLaterSubpass {
+                        pipeline::CreateRenderPipelineError::SubpassTargetInputAttachmentIndexOutOfRange {
                             subpass: subpass as u32,
-                            input_subpass,
+                            input_attachment_index,
+                            color_attachment_count,
                         },
                     );
                 }
@@ -5561,7 +5573,29 @@ mod tests {
     }
 
     #[test]
-    fn subpass_target_validation_rejects_non_earlier_input_subpass() {
+    fn subpass_target_validation_allows_distinct_input_attachment_indices() {
+        let target = SubpassTarget {
+            index: 1,
+            color_attachment_formats: vec![
+                Some(TextureFormat::Rgba8Unorm),
+                Some(TextureFormat::Rgba8Unorm),
+            ],
+            depth_stencil_format: None,
+            subpass_descs: vec![
+                SubpassTargetDesc::default(),
+                SubpassTargetDesc {
+                    color_attachment_indices: vec![0],
+                    uses_depth_stencil: false,
+                    input_attachment_indices: vec![1],
+                },
+            ],
+            dependencies: vec![],
+        };
+        assert!(Device::validate_subpass_target(Features::MULTI_SUBPASS, Some(&target)).is_ok());
+    }
+
+    #[test]
+    fn subpass_target_validation_rejects_out_of_range_input_attachment_slot() {
         let target = SubpassTarget {
             index: 1,
             color_attachment_formats: vec![Some(TextureFormat::Rgba8Unorm)],
@@ -5580,10 +5614,35 @@ mod tests {
             Device::validate_subpass_target(Features::MULTI_SUBPASS, Some(&target)).unwrap_err();
         assert!(matches!(
             error,
-            CreateRenderPipelineError::SubpassTargetInputAttachmentReferencesLaterSubpass {
+            CreateRenderPipelineError::SubpassTargetInputAttachmentIndexOutOfRange {
                 subpass: 1,
-                input_subpass: 1
+                input_attachment_index: 1,
+                color_attachment_count: 1
             }
+        ));
+    }
+
+    #[test]
+    fn subpass_target_validation_rejects_depth_input_without_depth_format() {
+        let target = SubpassTarget {
+            index: 1,
+            color_attachment_formats: vec![Some(TextureFormat::Rgba8Unorm)],
+            depth_stencil_format: None,
+            subpass_descs: vec![
+                SubpassTargetDesc::default(),
+                SubpassTargetDesc {
+                    color_attachment_indices: vec![0],
+                    uses_depth_stencil: false,
+                    input_attachment_indices: vec![u32::MAX],
+                },
+            ],
+            dependencies: vec![],
+        };
+        let error =
+            Device::validate_subpass_target(Features::MULTI_SUBPASS, Some(&target)).unwrap_err();
+        assert!(matches!(
+            error,
+            CreateRenderPipelineError::SubpassTargetDepthInputWithoutDepthStencil { subpass: 1 }
         ));
     }
 

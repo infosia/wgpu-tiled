@@ -484,16 +484,28 @@ fn advance_subpass_index(
     Ok(Some(next_active_subpass))
 }
 
-fn subpass_target_input_attachment_indices(
-    subpass: &ArcSubpassDescriptor,
-) -> impl Iterator<Item = u32> + '_ {
+fn subpass_target_input_attachment_indices<'a>(
+    subpass: &'a ArcSubpassDescriptor,
+    all_subpasses: &'a [ArcSubpassDescriptor],
+) -> impl Iterator<Item = u32> + 'a {
     subpass
         .input_attachments
         .iter()
         .map(|input| match input.source {
-            SubpassInputSource::Color { subpass, .. } | SubpassInputSource::Depth { subpass } => {
-                subpass.0
-            }
+            SubpassInputSource::Color {
+                subpass,
+                attachment_index,
+                ..
+            } => all_subpasses
+                .get(subpass.0 as usize)
+                .and_then(|source_subpass| {
+                    source_subpass
+                        .color_attachment_indices
+                        .get(attachment_index as usize)
+                })
+                .copied()
+                .unwrap_or(u32::MAX),
+            SubpassInputSource::Depth { .. } => u32::MAX,
         })
 }
 
@@ -573,7 +585,7 @@ fn pipeline_subpass_target_first_mismatch(
             .input_attachment_indices
             .iter()
             .copied()
-            .eq(subpass_target_input_attachment_indices(subpass))
+            .eq(subpass_target_input_attachment_indices(subpass, subpasses))
         {
             return Some(SubpassTargetMismatch::SubpassInputAttachmentIndices {
                 subpass_index: subpass_index as u32,
@@ -5162,6 +5174,80 @@ mod tests {
             ),
             Some(SubpassTargetMismatch::MissingDependency(dep)) if dep == missing_dependency
         ));
+    }
+
+    #[test]
+    fn pipeline_subpass_target_matches_non_zero_producer_input_slot() {
+        let subpasses = vec![
+            ArcSubpassDescriptor {
+                color_attachment_indices: vec![1],
+                uses_depth_stencil: false,
+                input_attachments: vec![],
+            },
+            ArcSubpassDescriptor {
+                color_attachment_indices: vec![2],
+                uses_depth_stencil: false,
+                input_attachments: vec![SubpassInputAttachment {
+                    binding: 0,
+                    source: SubpassInputSource::Color {
+                        subpass: SubpassIndex(0),
+                        attachment_index: 0,
+                    },
+                }],
+            },
+        ];
+        let pass_context = RenderPassContext {
+            attachments: AttachmentData {
+                colors: [
+                    Some(TextureFormat::Rgba8Unorm),
+                    Some(TextureFormat::Rgba16Float),
+                    Some(TextureFormat::Rgba16Float),
+                ]
+                .into_iter()
+                .collect(),
+                resolves: ArrayVec::new(),
+                depth_stencil: None,
+            },
+            sample_count: 1,
+            multiview_mask: None,
+        };
+        let dependency = SubpassDependency {
+            src_subpass: SubpassIndex(0),
+            dst_subpass: SubpassIndex(1),
+            dependency_type: SubpassDependencyType::ColorToInput,
+            by_region: true,
+        };
+        let target = SubpassTarget {
+            index: 1,
+            color_attachment_formats: vec![
+                Some(TextureFormat::Rgba8Unorm),
+                Some(TextureFormat::Rgba16Float),
+                Some(TextureFormat::Rgba16Float),
+            ],
+            depth_stencil_format: None,
+            subpass_descs: vec![
+                SubpassTargetDesc {
+                    color_attachment_indices: vec![1],
+                    uses_depth_stencil: false,
+                    input_attachment_indices: vec![],
+                },
+                SubpassTargetDesc {
+                    color_attachment_indices: vec![2],
+                    uses_depth_stencil: false,
+                    input_attachment_indices: vec![1],
+                },
+            ],
+            dependencies: vec![dependency],
+        };
+
+        assert!(pipeline_subpass_target_first_mismatch(
+            &target,
+            Some(1),
+            &pass_context,
+            &subpasses,
+            &[dependency],
+        )
+        .is_none());
     }
 
     #[test]

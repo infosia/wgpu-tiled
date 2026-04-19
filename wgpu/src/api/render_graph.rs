@@ -631,8 +631,21 @@ impl RenderGraph {
                     .input_attachments
                     .iter()
                     .map(|input| match input.source {
-                        SubpassInputSource::Color { subpass, .. }
-                        | SubpassInputSource::Depth { subpass } => subpass.0,
+                        SubpassInputSource::Color {
+                            subpass,
+                            attachment_index,
+                            ..
+                        } => self
+                            .subpasses
+                            .get(subpass.0 as usize)
+                            .and_then(|source_subpass| {
+                                source_subpass
+                                    .color_attachment_indices
+                                    .get(attachment_index as usize)
+                            })
+                            .copied()
+                            .unwrap_or(u32::MAX),
+                        SubpassInputSource::Depth { .. } => u32::MAX,
                     })
                     .collect(),
             })
@@ -986,6 +999,68 @@ mod tests {
         assert_eq!(target.subpass_descs[1].color_attachment_indices, vec![1]);
         assert_eq!(target.subpass_descs[1].input_attachment_indices, vec![0]);
         assert_eq!(target.dependencies, graph.dependencies);
+    }
+
+    #[test]
+    fn make_subpass_target_preserves_multiple_input_attachment_slots() {
+        let mut builder = RenderGraphBuilder::new();
+        let albedo = builder.add_transient_color("albedo", TextureFormat::Rgba8Unorm);
+        let normal = builder.add_transient_color("normal", TextureFormat::Rgba16Float);
+        let lit = builder.add_transient_color("lit", TextureFormat::Rgba16Float);
+        let out = builder.add_persistent_color("out", TextureFormat::Rgba16Float);
+        let _ = builder
+            .add_subpass("s0")
+            .writes_color(albedo)
+            .writes_color(normal);
+        let _ = builder
+            .add_subpass("s1")
+            .reads(albedo)
+            .reads(normal)
+            .writes_color(lit);
+        let _ = builder.add_subpass("s2").reads(lit).writes_color(out);
+        let graph = builder.build().unwrap();
+
+        let target = graph.make_subpass_target(
+            2,
+            &[
+                Some(TextureFormat::Rgba8Unorm),
+                Some(TextureFormat::Rgba16Float),
+                Some(TextureFormat::Rgba16Float),
+                Some(TextureFormat::Rgba16Float),
+            ],
+            None,
+        );
+
+        assert_eq!(target.subpass_descs[1].input_attachment_indices, vec![0, 1]);
+        assert_eq!(target.subpass_descs[2].input_attachment_indices, vec![2]);
+    }
+
+    #[test]
+    fn make_subpass_target_maps_producer_local_slot_to_global_color_slot() {
+        let mut builder = RenderGraphBuilder::new();
+        let color0 = builder.add_transient_color("color0", TextureFormat::Rgba8Unorm);
+        let color1 = builder.add_transient_color("color1", TextureFormat::Rgba8Unorm);
+        let out = builder.add_persistent_color("out", TextureFormat::Rgba8Unorm);
+        let _ = builder.add_subpass("producer").writes_color(color1);
+        let _ = builder
+            .add_subpass("consumer")
+            .reads(color1)
+            .writes_color(out);
+        let graph = builder.build().unwrap();
+
+        let target = graph.make_subpass_target(
+            1,
+            &[
+                Some(TextureFormat::Rgba8Unorm),
+                Some(TextureFormat::Rgba8Unorm),
+                Some(TextureFormat::Rgba8Unorm),
+            ],
+            None,
+        );
+
+        assert_eq!(target.subpass_descs[0].color_attachment_indices, vec![1]);
+        assert_eq!(target.subpass_descs[1].input_attachment_indices, vec![1]);
+        let _ = color0;
     }
 
     #[test]

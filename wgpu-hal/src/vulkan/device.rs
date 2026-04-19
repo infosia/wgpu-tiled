@@ -2570,26 +2570,14 @@ impl crate::Device for super::Device {
                 let input_attachment_indices = subpass
                     .input_attachment_indices
                     .iter()
-                    .map(|&source_subpass| {
-                        let source_desc = subpass_target.subpass_descs.get(source_subpass as usize);
-                        let Some(source_desc) = source_desc else {
-                            return vk::ATTACHMENT_UNUSED;
-                        };
-                        source_desc
-                            .color_attachment_indices
-                            .first()
-                            .and_then(|&attachment_slot| {
-                                color_attachment_indices
-                                    .get(attachment_slot as usize)
-                                    .copied()
-                                    .flatten()
-                            })
-                            .or_else(|| {
-                                source_desc
-                                    .uses_depth_stencil
-                                    .then_some(depth_stencil_attachment_index)
-                                    .flatten()
-                            })
+                    .map(|&attachment_slot| {
+                        if attachment_slot == u32::MAX {
+                            return depth_stencil_attachment_index.unwrap_or(vk::ATTACHMENT_UNUSED);
+                        }
+                        color_attachment_indices
+                            .get(attachment_slot as usize)
+                            .copied()
+                            .flatten()
                             .unwrap_or(vk::ATTACHMENT_UNUSED)
                     })
                     .collect::<Vec<_>>();

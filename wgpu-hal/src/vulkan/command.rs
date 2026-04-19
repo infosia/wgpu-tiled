@@ -1137,11 +1137,22 @@ impl crate::CommandEncoder for super::CommandEncoder {
                     .iter()
                     .map(|input_attachment| match input_attachment.source {
                         wgt::SubpassInputSource::Color {
-                            attachment_index, ..
-                        } => color_attachment_indices
-                            .get(attachment_index as usize)
-                            .copied()
-                            .flatten()
+                            subpass,
+                            attachment_index,
+                        } => desc
+                            .subpasses
+                            .get(subpass.0 as usize)
+                            .and_then(|source_subpass| {
+                                source_subpass
+                                    .color_attachment_indices
+                                    .get(attachment_index as usize)
+                            })
+                            .and_then(|&source_attachment_slot| {
+                                color_attachment_indices
+                                    .get(source_attachment_slot as usize)
+                                    .copied()
+                                    .flatten()
+                            })
                             .unwrap_or(vk::ATTACHMENT_UNUSED),
                         wgt::SubpassInputSource::Depth { .. } => {
                             depth_stencil_attachment_index.unwrap_or(vk::ATTACHMENT_UNUSED)

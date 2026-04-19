@@ -738,8 +738,18 @@ pub enum CreateRenderPipelineError {
         "Subpass target index {index} must be less than subpass descriptor count {subpass_count}"
     )]
     SubpassTargetIndexOutOfRange { index: u32, subpass_count: u32 },
-    #[error("Subpass target subpass {subpass} references input from subpass {input_subpass}, which is not earlier")]
-    SubpassTargetInputAttachmentReferencesLaterSubpass { subpass: u32, input_subpass: u32 },
+    #[error(
+        "Subpass target subpass {subpass} references input attachment slot {input_attachment_index}, but only {color_attachment_count} color attachment slots are declared"
+    )]
+    SubpassTargetInputAttachmentIndexOutOfRange {
+        subpass: u32,
+        input_attachment_index: u32,
+        color_attachment_count: u32,
+    },
+    #[error(
+        "Subpass target subpass {subpass} references depth input attachment, but depth_stencil_format is not declared"
+    )]
+    SubpassTargetDepthInputWithoutDepthStencil { subpass: u32 },
     #[error("{}", concat!(
         "At least one color attachment or depth-stencil attachment was expected, ",
         "but no render target for the pipeline was specified."
@@ -777,7 +787,8 @@ impl WebGpuError for CreateRenderPipelineError {
             | Self::UnalignedShader { .. }
             | Self::DualSourceBlendingWithMultipleColorTargets { .. }
             | Self::SubpassTargetIndexOutOfRange { .. }
-            | Self::SubpassTargetInputAttachmentReferencesLaterSubpass { .. }
+            | Self::SubpassTargetInputAttachmentIndexOutOfRange { .. }
+            | Self::SubpassTargetDepthInputWithoutDepthStencil { .. }
             | Self::NoTargetSpecified
             | Self::PipelineConstants { .. }
             | Self::VertexAttributeStrideTooLarge { .. } => ErrorType::Validation,

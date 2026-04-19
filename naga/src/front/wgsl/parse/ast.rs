@@ -253,6 +253,10 @@ pub enum Binding<'a> {
 pub struct ResourceBinding<'a> {
     pub group: Handle<Expression<'a>>,
     pub binding: Handle<Expression<'a>>,
+    /// WGSL `@input_attachment_index(N)` for subpass-data images.
+    ///
+    /// This value is a framebuffer color slot index in backend lowering
+    /// (for example, MSL `[[color(N)]]` fragment inputs).
     pub input_attachment_index: Option<Handle<Expression<'a>>>,
 }
 

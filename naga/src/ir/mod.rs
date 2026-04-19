@@ -1172,6 +1172,10 @@ pub struct ResourceBinding {
     /// Binding number within the group.
     pub binding: u32,
     /// Input attachment index for subpass-data images.
+    ///
+    /// This is the literal framebuffer color slot index used by WGSL
+    /// `@input_attachment_index(N)` and backend-specific lowering (for example,
+    /// MSL `[[color(N)]]` fragment inputs).
     pub input_attachment_index: Option<u32>,
 }
 
