@@ -1,8 +1,122 @@
-# wgpu
+# wgpu-tiled
+
+> **A mobile-optimized fork of [wgpu](https://github.com/gfx-rs/wgpu) with tile-based deferred rendering (TBDR) support.**
+
 <img align="right" width="20%" src="logo.png">
 
-[![Build Status](https://img.shields.io/github/actions/workflow/status/gfx-rs/wgpu/ci.yml?branch=trunk&logo=github&label=CI)](https://github.com/gfx-rs/wgpu/actions)
-[![codecov.io](https://img.shields.io/codecov/c/github/gfx-rs/wgpu?logo=codecov&logoColor=fff&label=codecov&token=84qJTesmeS)](https://codecov.io/gh/gfx-rs/wgpu)
+## What is wgpu-tiled?
+
+wgpu-tiled extends wgpu with **multi-subpass render passes**, **transient (tile-memory-only) attachments**, and **input attachments** -- the critical GPU features that mobile TBDR architectures (Apple GPU, Qualcomm Adreno, ARM Mali) need to keep intermediate rendering data in fast on-chip tile memory instead of round-tripping through slow main memory (DRAM).
+
+Standard wgpu follows the WebGPU spec, which only supports flat single-pass rendering. This forces mobile GPUs to write intermediate data (G-buffers, depth, normals) to DRAM between passes, then read it back -- wasting bandwidth and battery. **wgpu-tiled eliminates this bottleneck.**
+
+### Key Features
+
+| Feature | What it does | Mobile benefit |
+|---------|-------------|----------------|
+| **Transient Attachments** | Tile-memory-only textures with no DRAM backing (`MTLStorageModeMemoryless`, `VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT`) | Zero main memory allocation for intermediate buffers |
+| **Multi-Subpass Render Passes** | Multiple rendering phases within a single hardware pass | G-buffer data stays in tile memory across subpasses |
+| **Input Attachments** | Read previous subpass output at the current fragment position | Direct tile memory read, no texture sampling overhead |
+| **Dynamic Subpass Culling** | Per-frame subpass activation/deactivation without pipeline recompilation | Skip debug/optional passes with zero GPU cost |
+| **RenderGraphBuilder** | Declarative API that auto-infers load/store ops and generates subpass dependencies | Correct TBDR optimization with minimal boilerplate |
+| **SubpassData in naga** | `ImageDimension::SubpassData` IR + `InputAttachmentIndex` SPIR-V decoration + GLSL `use_framebuffer_fetch` option | Shader compiler support for tile memory reads |
+
+### Supported Backends
+
+| Backend | Transient Attachments | Multi-Subpass | Tile Dispatch |
+|---------|:--------------------:|:-------------:|:-------------:|
+| **Metal** | `MTLStorageModeMemoryless` | Single encoder, `[[color(N)]]` tile shading | Deferred |
+| **Vulkan** | `LAZILY_ALLOCATED` memory | Native `vkCmdNextSubpass` with `BY_REGION_BIT` | N/A |
+| **GLES** | Regular texture (fallback) | `EXT_shader_framebuffer_fetch` or multi-pass | N/A |
+| **DX12** | Stub (regular texture) | Stub (separate passes) | N/A |
+
+### Architecture
+
+```
+wgpu (public API)          -- RenderPass::next_subpass(), RenderGraphBuilder
+  |
+wgpu-core (validation)     -- TransientAttachment resources, subpass validation errors
+  |
+wgpu-hal (HAL traits)      -- Device::create_transient_attachment(), CommandEncoder::next_subpass()
+  |
+  +-- Metal backend         -- Memoryless textures, single-encoder subpass state machine
+  +-- Vulkan backend        -- LAZILY_ALLOCATED, N-subpass VkRenderPass, SubpassDependency
+  +-- GLES backend          -- Renderbuffer fallback, EXT_shader_framebuffer_fetch detection
+  +-- DX12 backend          -- Stub implementations
+  |
+naga (shader compiler)     -- SubpassData IR, InputAttachmentIndex, use_framebuffer_fetch
+```
+
+### WGSL Shader Extension: `@input_attachment_index`
+
+wgpu-tiled extends WGSL with `@input_attachment_index(N)` for reading previous subpass output directly from tile memory:
+
+```wgsl
+// Lighting pass shader -- reads G-Buffer via input attachments
+@group(0) @binding(0) @input_attachment_index(0) var t_albedo: texture_2d<f32>;
+@group(0) @binding(1) @input_attachment_index(1) var t_normal: texture_2d<f32>;
+
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    let albedo = textureLoad(t_albedo, vec2<i32>(0, 0), 0).rgb;
+    let normal = textureLoad(t_normal, vec2<i32>(0, 0), 0).rgb;
+    // ... lighting calculation ...
+}
+```
+
+The `@input_attachment_index(N)` attribute marks a `texture_2d` variable as a subpass input attachment. The coordinates passed to `textureLoad` are ignored -- the backend reads from the current fragment position automatically. naga compiles this to:
+- **SPIR-V**: `OpTypeImage` with `Dim=SubpassData`, `InputAttachmentIndex` decoration
+- **MSL**: `[[color(N)]]` fragment function parameter (tile memory read)
+- **GLSL**: `inout` color attachment via `EXT_shader_framebuffer_fetch`, or `texelFetch(sampler, ivec2(gl_FragCoord.xy), 0)` fallback
+
+### Quick Example
+
+```rust
+use wgpu::{RenderGraphBuilder, TextureFormat, SubpassIndex};
+
+// Declare a deferred rendering graph
+let mut builder = RenderGraphBuilder::new();
+let albedo = builder.add_transient_color("albedo", TextureFormat::Rgba8Unorm);
+let output = builder.add_persistent_color("output", TextureFormat::Bgra8Unorm);
+
+builder.add_subpass("gbuffer").writes_color(albedo);
+builder.add_subpass("composite").reads(albedo).writes_color(output);
+
+let graph = builder.build()?;
+
+// Dynamic culling -- skip optional passes without pipeline recompilation
+let mask = graph.resolve_active(&[SubpassIndex(0), SubpassIndex(1)])?;
+```
+
+See `examples/features/src/deferred_rendering/` for a complete working example with G-Buffer + lighting subpasses running on Vulkan.
+
+### Performance
+
+Benchmarked with a 3-subpass deferred rendering pipeline (G-Buffer → Lighting → Composite), 288K triangles, 225 draw calls per frame. Comparison is wgpu-tiled subpass mode vs upstream wgpu multi-pass (3 separate render passes).
+
+#### Metal — Apple A15 GPU (iOS, 960×1440)
+
+| Metric | wgpu-tiled (subpass) | Upstream wgpu (multi-pass) | Improvement |
+|--------|---------------------:|---------------------------:|------------:|
+| GPU render time (avg) | **4.16 ms** | 4.46 ms | **7% faster** |
+| DRAM bandwidth/frame | **5.3 MB** | 63.3 MB | **12x less** |
+
+#### Vulkan — ARM Mali-G78 (Android, 1080×2209)
+
+| Metric | wgpu-tiled (subpass) | Upstream wgpu (multi-pass) | Improvement |
+|--------|---------------------:|---------------------------:|------------:|
+| Avg frame time | **2.19 ms** (456 FPS) | 4.07 ms (245 FPS) | **1.86x faster** |
+| DRAM bandwidth/frame | **9.1 MB** | 109.2 MB | **12x less** |
+
+Both backends achieve a **12x DRAM bandwidth reduction** — G-buffer intermediates stay in on-chip tile memory, and only the final swapchain write hits DRAM. On Mali-G78, the bandwidth savings translate to a 1.86x frame time improvement despite slightly higher GPU shader execution time, demonstrating that DRAM avoidance dominates performance on bandwidth-constrained mobile SoCs.
+
+### This is a Fork
+
+wgpu-tiled is a **permanent fork** of wgpu v29.0.1. It deliberately breaks WebGPU spec compliance to expose native TBDR capabilities. There are no plans to upstream these changes or track upstream wgpu releases.
+
+---
+
+# wgpu (upstream)
 
 `wgpu` is a cross-platform, safe, pure-Rust graphics API. It runs natively on Vulkan, Metal, D3D12, and OpenGL; and on top of WebGL2 and WebGPU on wasm.
 
