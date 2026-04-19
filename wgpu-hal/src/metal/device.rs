@@ -88,6 +88,64 @@ fn create_disabled_depth_stencil_desc() -> Retained<MTLDepthStencilDescriptor> {
     desc
 }
 
+fn validate_subpass_output_remap(
+    output_remap: &[u32],
+    color_target_count: usize,
+    color_attachment_count: usize,
+) -> Result<(), alloc::string::String> {
+    if output_remap.len() != color_target_count {
+        return Err(alloc::format!(
+            "subpass output remap count ({}) does not match pipeline color target count ({color_target_count})",
+            output_remap.len(),
+        ));
+    }
+
+    let mut seen = alloc::vec![false; color_attachment_count];
+    for (location, &attachment_index) in output_remap.iter().enumerate() {
+        let attachment_index = attachment_index as usize;
+        if attachment_index >= color_attachment_count {
+            return Err(alloc::format!(
+                "subpass output remap for fragment output {location} points at color attachment {attachment_index}, but the render pass only declares {color_attachment_count} color attachment slots",
+            ));
+        }
+        if core::mem::replace(&mut seen[attachment_index], true) {
+            return Err(alloc::format!(
+                "subpass output remap assigns fragment output {location} to color attachment {attachment_index}, which is already used by another fragment output",
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn get_subpass_attachment_remaps(
+    target: &wgt::SubpassTarget,
+) -> Result<(Vec<u32>, Vec<u32>), alloc::string::String> {
+    let subpass_index = target.index as usize;
+    let subpass_desc = target.subpass_descs.get(subpass_index).ok_or_else(|| {
+        alloc::format!(
+            "subpass target index {} is out of bounds for {} declared subpasses",
+            target.index,
+            target.subpass_descs.len(),
+        )
+    })?;
+
+    Ok((
+        subpass_desc.input_attachment_indices.clone(),
+        subpass_desc.color_attachment_indices.clone(),
+    ))
+}
+
+fn should_use_disabled_depth_stencil_state_for_subpass(
+    depth_stencil: Option<&wgt::DepthStencilState>,
+    subpass_target: Option<&wgt::SubpassTarget>,
+) -> bool {
+    depth_stencil.is_none()
+        && subpass_target
+            .and_then(|target| target.depth_stencil_format)
+            .is_some()
+}
+
 const fn convert_vertex_format_to_naga(format: wgt::VertexFormat) -> naga::back::msl::VertexFormat {
     match format {
         wgt::VertexFormat::Uint8 => naga::back::msl::VertexFormat::Uint8,
@@ -1625,8 +1683,19 @@ impl crate::Device for super::Device {
             let active_subpass_desc = desc
                 .subpass_target
                 .and_then(|target| target.subpass_descs.get(target.index as usize));
-            let fragment_output_remap =
-                active_subpass_desc.map(|subpass| subpass.color_attachment_indices.as_slice());
+            let (_input_att_remap, output_att_remap): (Vec<u32>, Vec<u32>) =
+                if let Some(target) = desc.subpass_target {
+                    get_subpass_attachment_remaps(target).map_err(|msg| {
+                        crate::PipelineError::Linkage(wgt::ShaderStages::FRAGMENT, msg)
+                    })?
+                } else {
+                    Default::default()
+                };
+            let fragment_output_remap = if desc.subpass_target.is_some() {
+                Some(output_att_remap.as_slice())
+            } else {
+                None
+            };
 
             // Fragment shader
             let fs_info = match desc.fragment_stage {
@@ -1677,15 +1746,20 @@ impl crate::Device for super::Device {
                 .unwrap_or(true);
 
             // Setup pipeline color attachments
-            let pass_color_formats = desc
-                .subpass_target
-                .map(|target| target.color_attachment_formats.clone())
-                .unwrap_or_else(|| {
-                    desc.color_targets
-                        .iter()
-                        .map(|target| target.as_ref().map(|target| target.format))
-                        .collect()
-                });
+            let pass_color_formats = if let Some(target) = desc.subpass_target {
+                validate_subpass_output_remap(
+                    &output_att_remap,
+                    desc.color_targets.len(),
+                    target.color_attachment_formats.len(),
+                )
+                .map_err(|msg| crate::PipelineError::Linkage(wgt::ShaderStages::FRAGMENT, msg))?;
+                target.color_attachment_formats.clone()
+            } else {
+                desc.color_targets
+                    .iter()
+                    .map(|target| target.as_ref().map(|target| target.format))
+                    .collect()
+            };
             for (slot, format) in pass_color_formats.iter().enumerate() {
                 let at_descriptor =
                     unsafe { descriptor.colorAttachments().objectAtIndexedSubscript(slot) };
@@ -1705,9 +1779,11 @@ impl crate::Device for super::Device {
                 let Some(ct) = ct.as_ref() else {
                     continue;
                 };
-                let slot = active_subpass_desc
-                    .and_then(|subpass| subpass.color_attachment_indices.get(local_slot).copied())
-                    .unwrap_or(local_slot as u32) as usize;
+                let slot = if desc.subpass_target.is_some() {
+                    output_att_remap[local_slot] as usize
+                } else {
+                    local_slot
+                };
                 let Some(expected_format) = pass_color_formats.get(slot).copied() else {
                     return Err(crate::PipelineError::Linkage(
                         wgt::ShaderStages::FRAGMENT,
@@ -1781,11 +1857,15 @@ impl crate::Device for super::Device {
                     }
                 }
                 None => {
-                    if desc
-                        .subpass_target
-                        .and_then(|target| target.depth_stencil_format)
-                        .is_some()
-                    {
+                    if should_use_disabled_depth_stencil_state_for_subpass(
+                        None,
+                        desc.subpass_target,
+                    ) {
+                        // For multi-subpass pipelines that don't use depth but
+                        // share a render pass with one that does, Metal requires
+                        // the depth pixel format to match. We hit this bug in real
+                        // hardware: otherwise the old depth compare + write
+                        // persists and blocks fragments.
                         let ds_descriptor = create_disabled_depth_stencil_desc();
                         let raw = self
                             .shared
@@ -2231,5 +2311,116 @@ impl crate::Device for super::Device {
         // TODO: see https://github.com/gfx-rs/wgpu/issues/7460
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        get_subpass_attachment_remaps, should_use_disabled_depth_stencil_state_for_subpass,
+        validate_subpass_output_remap,
+    };
+
+    #[test]
+    fn validate_subpass_output_remap_accepts_matching_remap() {
+        assert!(validate_subpass_output_remap(&[2, 3], 2, 4).is_ok());
+    }
+
+    #[test]
+    fn validate_subpass_output_remap_rejects_length_mismatch() {
+        let err = validate_subpass_output_remap(&[2], 2, 4).unwrap_err();
+        assert!(
+            err.contains("does not match pipeline color target count"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn validate_subpass_output_remap_rejects_out_of_bounds_attachment() {
+        let err = validate_subpass_output_remap(&[2], 1, 2).unwrap_err();
+        assert!(
+            err.contains("only declares 2 color attachment slots"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn validate_subpass_output_remap_rejects_duplicate_attachment() {
+        let err = validate_subpass_output_remap(&[1, 1], 2, 3).unwrap_err();
+        assert!(
+            err.contains("already used by another fragment output"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn get_subpass_attachment_remaps_rejects_invalid_subpass_index() {
+        let err = get_subpass_attachment_remaps(&wgt::SubpassTarget {
+            index: 1,
+            color_attachment_formats: vec![],
+            depth_stencil_format: None,
+            subpass_descs: vec![wgt::SubpassTargetDesc {
+                color_attachment_indices: vec![],
+                uses_depth_stencil: false,
+                input_attachment_indices: vec![],
+            }],
+            dependencies: vec![],
+        })
+        .unwrap_err();
+        assert!(err.contains("out of bounds"), "{err}");
+    }
+
+    #[test]
+    fn depth_disabled_fallback_triggers_for_depthless_pipeline_in_depth_pass() {
+        let target = wgt::SubpassTarget {
+            index: 1,
+            color_attachment_formats: vec![Some(wgt::TextureFormat::Rgba8Unorm)],
+            depth_stencil_format: Some(wgt::TextureFormat::Depth32Float),
+            subpass_descs: vec![
+                wgt::SubpassTargetDesc {
+                    color_attachment_indices: vec![0],
+                    uses_depth_stencil: true,
+                    input_attachment_indices: vec![],
+                },
+                wgt::SubpassTargetDesc {
+                    color_attachment_indices: vec![0],
+                    uses_depth_stencil: false,
+                    input_attachment_indices: vec![],
+                },
+            ],
+            dependencies: vec![],
+        };
+
+        assert!(should_use_disabled_depth_stencil_state_for_subpass(
+            None,
+            Some(&target)
+        ));
+    }
+
+    #[test]
+    fn depth_disabled_fallback_not_used_when_pipeline_has_depth_state() {
+        let target = wgt::SubpassTarget {
+            index: 0,
+            color_attachment_formats: vec![Some(wgt::TextureFormat::Rgba8Unorm)],
+            depth_stencil_format: Some(wgt::TextureFormat::Depth32Float),
+            subpass_descs: vec![wgt::SubpassTargetDesc {
+                color_attachment_indices: vec![0],
+                uses_depth_stencil: true,
+                input_attachment_indices: vec![],
+            }],
+            dependencies: vec![],
+        };
+        let depth_stencil = wgt::DepthStencilState {
+            format: wgt::TextureFormat::Depth32Float,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(wgt::CompareFunction::Less),
+            stencil: wgt::StencilState::default(),
+            bias: wgt::DepthBiasState::default(),
+        };
+
+        assert!(!should_use_disabled_depth_stencil_state_for_subpass(
+            Some(&depth_stencil),
+            Some(&target)
+        ));
     }
 }
