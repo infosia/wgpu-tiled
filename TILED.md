@@ -3,8 +3,6 @@
 This document records the complete implementation of the tile-based deferred rendering (TBDR) extension for wgpu, covering every layer from types through shader compilation.
 
 **Fork base:** wgpu v29.0.1 (`923b89695`)
-**Branch:** `feature/subpass`
-**Repository:** https://github.com/infosia/wgpu-tiled
 
 ---
 
