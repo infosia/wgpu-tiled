@@ -60,12 +60,14 @@ Bottom level categories:
 
 - Replaced the `deferred_rendering` placeholder with a real headless two-subpass deferred sample that writes a G-buffer in subpass 0 and reads it as an input attachment in subpass 1.
 - `deferred_rendering` now requests `MULTI_SUBPASS | TRANSIENT_ATTACHMENTS` and requests non-zero subpass/input-attachment limits.
+- Converted `deferred_rendering` into a windowed three-subpass deferred sample (geometry, lighting, composite), moved its shaders into dedicated WGSL files, and added reference-image coverage (`examples/features/src/deferred_rendering/screenshot.png`).
 
 ### Testing/Internal
 
 #### General
 
 - Added a headless `wgpu-gpu` deferred subpass smoke test module (`deferred_rendering`) that now runs green on Vulkan and Metal without backend-specific expected-failure markers.
+- Removed the redundant headless `wgpu-gpu` deferred smoke module in favor of the new windowed `wgpu-examples` reference-image test.
 
 ### Changes
 
