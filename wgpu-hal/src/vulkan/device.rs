@@ -840,6 +840,7 @@ impl super::Device {
         stage: &crate::ProgrammableStage<super::ShaderModule>,
         naga_stage: naga::ShaderStage,
         binding_map: &naga::back::spv::BindingMap,
+        input_attachment_index_remap: Option<&[(u32, u32)]>,
     ) -> Result<CompiledStage, crate::PipelineError> {
         let stage_flags = crate::auxil::map_naga_stage(naga_stage);
         let vk_module = match *stage.module {
@@ -904,7 +905,7 @@ impl super::Device {
                     &self.naga_options
                 };
 
-                let (module, info) = naga::back::pipeline_constants::process_overrides(
+                let (mut module, info) = naga::back::pipeline_constants::process_overrides(
                     &naga_shader.module,
                     &naga_shader.info,
                     Some((naga_stage, stage.entry_point)),
@@ -913,6 +914,23 @@ impl super::Device {
                 .map_err(|e| {
                     crate::PipelineError::PipelineConstants(stage_flags, format!("{e}"))
                 })?;
+                if let Some(remap) = input_attachment_index_remap {
+                    let module = module.to_mut();
+                    for (_, global) in module.global_variables.iter_mut() {
+                        let Some(binding) = global.binding.as_mut() else {
+                            continue;
+                        };
+                        let Some(input_attachment_index) = binding.input_attachment_index else {
+                            continue;
+                        };
+                        if let Some((_, local_index)) = remap
+                            .iter()
+                            .find(|(shader_index, _)| *shader_index == input_attachment_index)
+                        {
+                            binding.input_attachment_index = Some(*local_index);
+                        }
+                    }
+                }
 
                 let spv = {
                     profiling::scope!("naga::spv::write_vec");
@@ -1646,6 +1664,7 @@ impl crate::Device for super::Device {
             active_subpass_index: None,
             subpass_count: 0,
             active_subpass_mask: None,
+            active_subpass_color_attachment_indices: Vec::new(),
             active_subpass_input_attachments: Vec::new(),
             subpass_input_attachment_descriptor_sets: Vec::new(),
             active_color_attachment_views: Vec::new(),
@@ -2208,6 +2227,7 @@ impl crate::Device for super::Device {
         let mut compatible_subpass_index = 0;
         let mut pipeline_input_attachments: Vec<super::PipelineInputAttachmentBinding> = Vec::new();
         let mut fragment_binding_map = desc.layout.binding_map.clone();
+        let mut fragment_input_attachment_index_remap: Vec<(u32, u32)> = Vec::new();
         if let Some(subpass_target) = subpass_target {
             compatible_subpass_index = subpass_target.index;
             compatible_rp_key.subpass_dependencies = subpass_target.dependencies.clone();
@@ -2242,11 +2262,20 @@ impl crate::Device for super::Device {
                                     ),
                                 ));
                             }
-                            if current_subpass_desc
+                            let local_input_attachment_index = if current_subpass_desc
                                 .input_attachment_indices
                                 .get(input_attachment_index as usize)
-                                .is_none()
+                                .is_some()
                             {
+                                input_attachment_index
+                            } else if let Some((local_index, _)) = current_subpass_desc
+                                .input_attachment_indices
+                                .iter()
+                                .enumerate()
+                                .find(|(_, slot)| **slot == input_attachment_index)
+                            {
+                                local_index as u32
+                            } else {
                                 return Err(crate::PipelineError::Linkage(
                                     wgt::ShaderStages::FRAGMENT,
                                     format!(
@@ -2254,9 +2283,20 @@ impl crate::Device for super::Device {
                                         input_attachment_index, subpass_target.index
                                     ),
                                 ));
+                            };
+                            if local_input_attachment_index != input_attachment_index
+                                && !fragment_input_attachment_index_remap.iter().any(
+                                    |(shader_index, _)| *shader_index == input_attachment_index,
+                                )
+                            {
+                                fragment_input_attachment_index_remap
+                                    .push((input_attachment_index, local_input_attachment_index));
                             }
+                            let mut mapped_binding = *binding;
+                            mapped_binding.input_attachment_index =
+                                Some(local_input_attachment_index);
                             fragment_binding_map.insert(
-                                *binding,
+                                mapped_binding,
                                 naga::back::spv::BindingInfo {
                                     binding_array_size: None,
                                     binding: binding.binding,
@@ -2348,6 +2388,7 @@ impl crate::Device for super::Device {
                     vertex_stage,
                     naga::ShaderStage::Vertex,
                     &desc.layout.binding_map,
+                    None,
                 )?);
                 stages.push(compiled_vs.as_ref().unwrap().create_info);
             }
@@ -2360,6 +2401,7 @@ impl crate::Device for super::Device {
                         t,
                         naga::ShaderStage::Task,
                         &desc.layout.binding_map,
+                        None,
                     )?);
                     stages.push(compiled_ts.as_ref().unwrap().create_info);
                 }
@@ -2367,14 +2409,19 @@ impl crate::Device for super::Device {
                     mesh_stage,
                     naga::ShaderStage::Mesh,
                     &desc.layout.binding_map,
+                    None,
                 )?);
                 stages.push(compiled_ms.as_ref().unwrap().create_info);
             }
         }
         let compiled_fs = match desc.fragment_stage {
             Some(ref stage) => {
-                let compiled =
-                    self.compile_stage(stage, naga::ShaderStage::Fragment, &fragment_binding_map)?;
+                let compiled = self.compile_stage(
+                    stage,
+                    naga::ShaderStage::Fragment,
+                    &fragment_binding_map,
+                    Some(&fragment_input_attachment_index_remap),
+                )?;
                 stages.push(compiled.create_info);
                 Some(compiled)
             }
@@ -2697,6 +2744,7 @@ impl crate::Device for super::Device {
             &desc.stage,
             naga::ShaderStage::Compute,
             &desc.layout.binding_map,
+            None,
         )?;
 
         let vk_infos = [{

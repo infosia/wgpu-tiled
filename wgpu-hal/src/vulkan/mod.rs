@@ -1042,6 +1042,7 @@ pub struct CommandEncoder {
     active_subpass_index: Option<u32>,
     subpass_count: u32,
     active_subpass_mask: Option<wgt::ActiveSubpassMask>,
+    active_subpass_color_attachment_indices: Vec<Vec<u32>>,
     active_subpass_input_attachments: Vec<Vec<wgt::SubpassInputAttachment>>,
     subpass_input_attachment_descriptor_sets: Vec<Option<vk::DescriptorSet>>,
     active_color_attachment_views: Vec<Option<vk::ImageView>>,

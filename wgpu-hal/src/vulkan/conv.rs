@@ -247,12 +247,11 @@ pub fn map_texture_usage(usage: wgt::TextureUses) -> vk::ImageUsageFlags {
     if usage.contains(wgt::TextureUses::COLOR_TARGET) {
         flags |= vk::ImageUsageFlags::COLOR_ATTACHMENT;
     }
-    if usage.contains(wgt::TextureUses::RESOURCE)
-        && usage.intersects(
-            wgt::TextureUses::COLOR_TARGET
-                | wgt::TextureUses::DEPTH_STENCIL_READ
-                | wgt::TextureUses::DEPTH_STENCIL_WRITE,
-        )
+    if usage.intersects(
+        wgt::TextureUses::COLOR_TARGET
+            | wgt::TextureUses::DEPTH_STENCIL_READ
+            | wgt::TextureUses::DEPTH_STENCIL_WRITE,
+    ) && usage.intersects(wgt::TextureUses::RESOURCE | wgt::TextureUses::TRANSIENT)
     {
         flags |= vk::ImageUsageFlags::INPUT_ATTACHMENT;
     }

@@ -146,11 +146,18 @@ impl super::CommandEncoder {
     ) -> Option<vk::DescriptorImageInfo> {
         match input.source {
             wgt::SubpassInputSource::Color {
-                attachment_index, ..
+                subpass,
+                attachment_index,
             } => self
-                .active_color_attachment_views
-                .get(attachment_index as usize)
+                .active_subpass_color_attachment_indices
+                .get(subpass.0 as usize)
+                .and_then(|source_subpass| source_subpass.get(attachment_index as usize))
                 .copied()
+                .and_then(|source_attachment_slot| {
+                    self.active_color_attachment_views
+                        .get(source_attachment_slot as usize)
+                        .copied()
+                })
                 .flatten()
                 .map(|view| {
                     vk::DescriptorImageInfo::default()
@@ -278,6 +285,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         self.active_subpass_index = None;
         self.subpass_count = 0;
         self.active_subpass_mask = None;
+        self.active_subpass_color_attachment_indices.clear();
         self.active_subpass_input_attachments.clear();
         self.subpass_input_attachment_descriptor_sets.clear();
         self.active_color_attachment_views.clear();
@@ -323,6 +331,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         self.active_subpass_index = None;
         self.subpass_count = 0;
         self.active_subpass_mask = None;
+        self.active_subpass_color_attachment_indices.clear();
         self.active_subpass_input_attachments.clear();
         self.subpass_input_attachment_descriptor_sets.clear();
         self.active_color_attachment_views.clear();
@@ -943,6 +952,11 @@ impl crate::CommandEncoder for super::CommandEncoder {
         } else {
             None
         };
+        self.active_subpass_color_attachment_indices = desc
+            .subpasses
+            .iter()
+            .map(|subpass| subpass.color_attachment_indices.to_vec())
+            .collect();
         self.active_subpass_input_attachments = desc
             .subpasses
             .iter()
@@ -1304,6 +1318,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         self.active_subpass_index = None;
         self.subpass_count = 0;
         self.active_subpass_mask = None;
+        self.active_subpass_color_attachment_indices.clear();
         self.active_subpass_input_attachments.clear();
         self.subpass_input_attachment_descriptor_sets.clear();
         self.active_color_attachment_views.clear();
