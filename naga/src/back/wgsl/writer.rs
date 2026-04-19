@@ -27,6 +27,7 @@ enum Attribute {
     Binding(u32),
     BuiltIn(crate::BuiltIn),
     Group(u32),
+    InputAttachmentIndex(u32),
     Invariant,
     Interpolate(Option<crate::Interpolation>, Option<crate::Sampling>),
     Location(u32),
@@ -588,6 +589,9 @@ impl<W: Write> Writer<W> {
                 }
                 Attribute::Binding(id) => write!(self.out, "@binding({id}) ")?,
                 Attribute::Group(id) => write!(self.out, "@group({id}) ")?,
+                Attribute::InputAttachmentIndex(id) => {
+                    write!(self.out, "@input_attachment_index({id}) ")?
+                }
                 Attribute::Invariant => write!(self.out, "@invariant ")?,
                 Attribute::Interpolate(interpolation, sampling) => {
                     if sampling.is_some() && sampling != Some(crate::Sampling::Center) {
@@ -1967,10 +1971,14 @@ impl<W: Write> Writer<W> {
     ) -> BackendResult {
         // Write group and binding attributes if present
         if let Some(ref binding) = global.binding {
-            self.write_attributes(&[
+            let mut attrs = alloc::vec![
                 Attribute::Group(binding.group),
                 Attribute::Binding(binding.binding),
-            ])?;
+            ];
+            if let Some(index) = binding.input_attachment_index {
+                attrs.push(Attribute::InputAttachmentIndex(index));
+            }
+            self.write_attributes(&attrs)?;
             writeln!(self.out)?;
         }
 

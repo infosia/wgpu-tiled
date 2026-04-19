@@ -1,4 +1,4 @@
-@group(0) @binding(0) 
+@group(0) @binding(0) @input_attachment_index(0) 
 var gbuffer_color: texture_2d<f32>;
 
 @fragment 

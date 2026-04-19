@@ -3,6 +3,7 @@
 ; Generator: rspirv
 ; Bound: 24
 OpCapability Shader
+OpCapability InputAttachment
 %1 = OpExtInstImport "GLSL.std.450"
 OpMemoryModel Logical GLSL450
 OpEntryPoint Fragment %13 "main" %11

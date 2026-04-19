@@ -1,4 +1,4 @@
-@group(0) @binding(0) 
+@group(0) @binding(0) @input_attachment_index(1) 
 var gbuffer_depth: texture_depth_2d;
 
 @fragment 
