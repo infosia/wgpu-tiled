@@ -56,7 +56,7 @@ These decisions were made upfront and shape the entire implementation:
 
 12. **`SubpassTarget` on `RenderPipelineDescriptor`** — Vulkan requires a compatible `VkRenderPass` at pipeline creation time. `SubpassTarget` carries the full subpass structure (color formats, depth format, per-subpass attachment indices, dependencies) so the Vulkan backend can construct the correct compatible render pass. Metal uses it for input attachment format derivation. GLES ignores it.
 
-13. **Vulkan input attachment descriptor sets are auto-managed** — The Vulkan backend automatically allocates, updates, and binds `VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT` descriptor sets during render pass execution. Users do not create bind groups for input attachments.
+13. **Vulkan input attachment descriptor sets are auto-managed internally** — The Vulkan backend allocates, updates, and binds `VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT` descriptor sets during render pass execution. Public shaders still use ordinary `@group/@binding` declarations, and cross-backend examples currently bind fallback texture views so the same shader layouts remain usable on Metal/GLES paths.
 
 ---
 
@@ -111,7 +111,7 @@ Updated: `with_limits!` macro, `defaults()`, `downlevel_defaults()`, `downlevel_
 
 ### Tests
 
-36 unit tests in `render.rs`, 4 feature flag tests in `features.rs`.
+36 unit tests in `render.rs`, 10 feature tests in `features.rs`.
 
 ---
 
@@ -181,7 +181,7 @@ All `RenderPassDescriptor` construction sites updated (wgpu-core, HAL examples).
 
 ### Tests
 
-5 unit tests in `lib.rs` for HAL-level types.
+8 unit tests in `lib.rs` for HAL-level types and render-pass defaults.
 
 ---
 
@@ -233,10 +233,10 @@ active_subpass_mask: Option<ActiveSubpassMask>,
 
 ### Feature/Limits Reporting
 
-- `TRANSIENT_ATTACHMENTS` and `MULTI_SUBPASS`: reported when `supports_memoryless_storage` is true
+- `TRANSIENT_ATTACHMENTS` and `MULTI_SUBPASS`: reported only when both tile shading and memoryless storage are available
 - `max_subpasses`: 32 (ActiveSubpassMask capacity)
 - `max_subpass_color_attachments` and `max_input_attachments`: from `max_color_render_targets`
-- `estimated_tile_memory_bytes`: 32 KB (conservative estimate for Apple GPUs)
+- `estimated_tile_memory_bytes`: from `max_total_threadgroup_memory`
 
 ### Tests
 
@@ -406,6 +406,8 @@ Drop impl destroys the HAL resource. Registered with `impl_resource_type!`, `imp
 - `Device::create_transient_attachment()` — validates device, calls HAL, wraps in Arc
 - `Device::create_transient_dispatch()` — requires `PROGRAMMABLE_TILE_DISPATCH` feature
 
+This plumbing is currently internal to `wgpu-core`; the public `wgpu` API still exposes transient rendering primarily through `TextureUsages::TRANSIENT` rather than transient attachment handles.
+
 ### Validation Errors
 
 5 new `RenderPassErrorInner` variants:
@@ -450,8 +452,8 @@ pub fn current_subpass_index(&self) -> Option<u32>;
 
 ### Type Re-exports
 
-13 types re-exported from `wgpu-types` at the `wgpu` crate root:
-`ActiveSubpassMask`, `SubpassDependency`, `SubpassDependencyType`, `SubpassIndex`, `SubpassInputAttachment`, `SubpassInputSource`, `SubpassLayout`, `TransientAttachmentDescriptor`, `TransientDispatchDescriptor`, `TransientLoadOp`, `TransientMemoryHint`, `TransientOps`, `TransientSize`
+15 tiled-related types are re-exported from `wgpu-types` at the `wgpu` crate root:
+`ActiveSubpassMask`, `SubpassDependency`, `SubpassDependencyType`, `SubpassIndex`, `SubpassInputAttachment`, `SubpassInputSource`, `SubpassLayout`, `SubpassTarget`, `SubpassTargetDesc`, `TransientAttachmentDescriptor`, `TransientDispatchDescriptor`, `TransientLoadOp`, `TransientMemoryHint`, `TransientOps`, `TransientSize`
 
 ---
 
@@ -484,13 +486,19 @@ let graph = builder.build()?;
 - `.reads(id)` / `.reads_depth(id)` — declares input attachment
 
 **`build()` performs:**
-1. Validates no subpasses → `RenderGraphError::NoSubpasses`
-2. Validates read-before-write → `RenderGraphError::ReadBeforeWrite`
-3. Validates persistent never written → `RenderGraphError::PersistentNeverWritten`
-4. Auto-generates `SubpassDependency` chains (all `by_region: true`)
-5. Builds `SubpassLayout` per subpass
+1. Validates sample count and subpass count → `InvalidSampleCount`, `TooManySubpasses`
+2. Validates no subpasses → `RenderGraphError::NoSubpasses`
+3. Validates attachment ids and roles → `InvalidAttachmentId`, `AttachmentRoleMismatch`
+4. Validates read-before-write and persistent outputs → `ReadBeforeWrite`, `PersistentNeverWritten`
+5. Validates per-subpass depth/input rules → `MultipleDepthWrites`, `MultipleDepthReads`
+6. Validates duplicate writes → `DuplicateAttachmentWrite`
+7. Auto-generates `SubpassDependency` chains (all `by_region: true`)
+8. Builds `SubpassLayout` metadata per subpass
 
-**Output:** `RenderGraph` — immutable, `Send + Sync`.
+**Output:** `RenderGraph` — immutable, `Send + Sync`, with helpers:
+- `descriptor_views()` for wiring `RenderPassDescriptor::subpasses` / dependencies / layouts
+- `make_subpass_target()` for generating `RenderPipelineDescriptor::subpass_target`
+- `attachment_label()` / `subpass_label()` for diagnostics
 
 ### Dynamic Subpass Culling (Phase 9)
 
@@ -506,7 +514,7 @@ let mask = graph.resolve_active(&[SubpassIndex(0), SubpassIndex(1)])?;
 
 ### Tests
 
-10 unit tests covering builder, validation errors, culling scenarios, and Send+Sync assertion.
+19 unit tests covering builder errors, descriptor views, `SubpassTarget` generation, culling scenarios, labels, and Send+Sync assertion.
 
 ---
 
@@ -562,6 +570,10 @@ All match arms on `ImageDimension` updated across every backend and frontend (25
 
 SubpassData images are allowed in `ImageLoad` expressions without requiring a valid sampler or level argument.
 
+### WGSL Backend (`back/wgsl/writer.rs`)
+
+WGSL re-emission now preserves `@input_attachment_index(N)` when writing modules back out.
+
 ### ResourceBinding Constructors
 
 15+ sites across naga frontends and wgpu-hal backends updated with `input_attachment_index: None`.
@@ -575,8 +587,9 @@ SubpassData images are allowed in `ImageLoad` expressions without requiring a va
 
 ### wgpu RenderPassDescriptor Extended
 
-3 new fields on user-facing `RenderPassDescriptor<'a>`:
+4 tiled-related fields on user-facing `RenderPassDescriptor<'a>`:
 ```rust
+pub subpasses: &'a [SubpassDescriptor<'a>],
 pub subpass_dependencies: &'a [wgt::SubpassDependency],
 pub transient_memory_hint: wgt::TransientMemoryHint,
 pub active_subpass_mask: Option<wgt::ActiveSubpassMask>,
@@ -596,7 +609,7 @@ Full vertical path:
 
 ### Data Flow
 
-Subpass dependencies, transient memory hint, and active subpass mask flow through:
+Subpass descriptors, dependencies, transient memory hint, and active subpass mask flow through:
 ```
 wgpu::RenderPassDescriptor
   → wgc::command::RenderPassDescriptor (Cow)
@@ -639,7 +652,9 @@ Vulkan requires a compatible `VkRenderPass` at pipeline creation time. `SubpassT
 - Auto-allocates `VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT` descriptor sets during render pass execution
 - Descriptor pool created per-render-pass, cleaned up after command buffer submission
 - `vkCmdBindDescriptorSets` issued at `set_render_pipeline()` when the pipeline's subpass has input attachments
+- Pipeline creation remaps shader `@input_attachment_index` values to the subpass-local indices Vulkan expects and places them in a spare descriptor-set slot
 - Pipeline creation builds a compatible `VkRenderPass` from `SubpassTarget` with correct subpass attachment references
+- Public `wgpu` examples still bind placeholder texture views for those bindings so the same shader modules remain valid on Metal/GLES
 
 ### Vulkan Sync Fixes (`vulkan/device.rs`)
 
@@ -669,12 +684,11 @@ Broadened subpass dependency dst flags: `COLOR_ATTACHMENT_OUTPUT | EARLY_FRAGMEN
 **Commit:** `60f3698f3`
 **Location:** `examples/features/src/subpass_render_graph/mod.rs`
 
-Exercises the full `RenderGraphBuilder` and culling API:
-- 3-subpass deferred graph (G-Buffer -> Lighting -> Composite)
-- Dynamic culling with validation
-- Optional debug pass
-- ActiveSubpassMask operations
-- All validation error cases
+Minimal headless render-graph demo:
+- 2-subpass graph (`gbuffer` -> `composite`)
+- Uses `descriptor_views()` to populate `RenderPassDescriptor::subpasses`
+- Uses `resolve_active()` to build an `ActiveSubpassMask`
+- Records a small multi-subpass render pass and calls `next_subpass()`
 
 ### `deferred_rendering` (visual)
 
@@ -685,12 +699,12 @@ Visual deferred shading with 3-subpass TBDR pipeline:
 - Subpass 0 (G-Buffer): Instanced 5x5 cube grid, outputs albedo (Rgba8Unorm) + normal (Rgba16Float) MRT + depth
 - Subpass 1 (Lighting): Reads G-Buffer via `@input_attachment_index`, Blinn-Phong with 4 orbiting point lights, outputs HDR (Rgba16Float)
 - Subpass 2 (Composite): Reads HDR via input attachment, Reinhard tonemapping → sRGB swapchain
-- All intermediate textures use `TRANSIENT` usage (`MTLStorageModeMemoryless` on Metal, 0 bytes DRAM)
+- All intermediate textures use `TextureUsages::TRANSIENT`
 - Orbiting camera, hemisphere ambient lighting, specular highlights
-- Uses `RenderGraphBuilder` for graph planning with `SubpassTarget` for pipeline compatibility
+- Uses `RenderGraphBuilder` for graph planning and auto-generated dependencies, while constructing `SubpassTarget` explicitly for pipeline compatibility
+- Binds 1x1 fallback texture views for input-attachment bindings so the same shaders remain usable across backends
 - WGSL shaders: `gbuffer.wgsl`, `lighting.wgsl`, `composite.wgsl`
 - Uses `glam` for matrix math
-- Verified on Metal, Vulkan, and GL/GLES
 
 ---
 
@@ -826,11 +840,11 @@ GPU render time is ~12% higher with subpass mode. This is expected — Vulkan su
 
 1. ~~**wgpu-core `RenderPassInfo::start()` doesn't pass subpass data to HAL**~~ — **Fixed.** Subpass dependencies, transient memory hint, and active subpass mask are now passed through to the HAL descriptor in `RenderPassInfo::start()`.
 
-2. ~~**`Device::create_transient_attachment` not in wgpu public API**~~ — **Fixed.** `DeviceInterface` trait method and `wgpu::Device::create_transient_attachment()` now exist. Note: the method currently returns void rather than a handle.
-
-3. ~~**Pipeline `SubpassLayout` validation**~~ — **Implemented via `SubpassTarget` + `RenderPassContext`.** Per-subpass `RenderPassContext` entries are built during `RenderPassInfo::start()`, and `set_pipeline()` validates the pipeline's `pass_context` against the current subpass context.
+2. ~~**Pipeline `SubpassLayout` validation**~~ — **Implemented via `SubpassTarget` + `RenderPassContext`.** Per-subpass `RenderPassContext` entries are built during `RenderPassInfo::start()`, and `set_pipeline()` validates the pipeline's `pass_context` against the current subpass context.
 
 ### Remaining
+
+3. **Public transient attachment handles** — `wgpu-core` and HAL expose `create_transient_attachment`, but the public `wgpu::Device` API still does not surface transient attachment objects. Current public usage relies on `TextureUsages::TRANSIENT` and the render-graph/subpass APIs.
 
 4. **DX12 subpass emulation** — Currently all stubs. Would need end-render-pass / begin-new-pass / bind-intermediates-as-SRVs approach.
 
