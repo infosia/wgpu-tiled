@@ -338,6 +338,33 @@ Adapted from TRAL's GLES backend:
 - Input attachments become texture samples
 - `glInvalidateFramebuffer` on transient attachments
 
+#### Tier B strategy decision: FBO-rebind-with-invalidate
+
+There are two viable Tier B strategies and this backend deliberately
+chose the second:
+
+1. **Keep one FBO open** across all subpasses; use
+   `glDrawBuffers`/draw-buffer-swap to mask which color attachments each
+   subpass writes; bind previous subpass outputs as `sampler2D` uniforms
+   for input-attachment reads. Cheaper per subpass transition (no FBO
+   rebind), but provides no explicit "this memory is scratch" signal to
+   the tiler.
+
+2. **Rebind a fresh FBO per subpass** via
+   `ResetFramebuffer { is_default: false }`, explicit per-attachment
+   rewires, and emit `glInvalidateFramebuffer` for attachments whose
+   store op is `StoreOp::Discard`. More GL state traffic per transition,
+   but `glInvalidateFramebuffer` is the canonical hint a tiler needs to
+   keep transient contents in on-chip memory and not write them back to
+   DRAM.
+
+The target audience for Tier B is mobile GLES (Mali, Adreno, PowerVR) —
+the exact hardware where `glInvalidateFramebuffer` matters for
+correctness of the bandwidth-reduction claim. Desktop GLES / WebGL2
+doesn't pay the per-transition cost either way because it has no tiler
+to hint. Strategy (2) is implemented here; the rationale is also
+captured as a doc-comment header in `wgpu-hal/src/gles/command.rs`.
+
 ### TransientAttachment
 
 GL renderbuffer (with MSAA support via `glRenderbufferStorageMultisample`). GLES has no memoryless storage — `glInvalidateFramebuffer` after the pass saves bandwidth on TBDR drivers.

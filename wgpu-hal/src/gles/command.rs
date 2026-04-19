@@ -1,3 +1,34 @@
+//! # GLES subpass strategy
+//!
+//! The GLES backend implements subpasses with two tiers, selected by the
+//! presence of `GL_EXT_shader_framebuffer_fetch`:
+//!
+//! - **Tier A (`FRAMEBUFFER_FETCH` available).** A single framebuffer stays
+//!   bound across all subpasses; the fetch extension lets the fragment
+//!   shader read the current tile's color without a texture sample.
+//!   Transient attachments stay in tile memory naturally; nothing extra to
+//!   do on subpass boundaries.
+//!
+//! - **Tier B (no extension — this module's fallback path).** At every
+//!   `next_subpass`, the encoder rebinds a fresh FBO via
+//!   `ResetFramebuffer { is_default: false }`, rewires per-attachment state,
+//!   and emits `glInvalidateFramebuffer` for any attachment whose
+//!   store op is `StoreOp::Discard`.
+//!
+//! The per-subpass FBO rebind costs more GL state traffic than the
+//! alternative (keeping one FBO open and masking draw buffers per
+//! subpass), but `glInvalidateFramebuffer` is the canonical signal to
+//! a tiler that the attachment memory is scratch and does **not** need
+//! to be written back to DRAM. Without invalidation, tile-based GPUs —
+//! which are precisely the ones that benefit from subpasses — may spill
+//! transient G-buffer contents to DRAM anyway, defeating the feature.
+//!
+//! This trade (more per-subpass state traffic in exchange for correct
+//! invalidation) is deliberate. The target audience for Tier B is mobile
+//! GLES (Mali, Adreno, PowerVR); desktop / WebGL2 doesn't pay the cost
+//! because it has no tiler to hint. See `TILED.md` (GLES section) for
+//! the cross-backend discussion.
+
 use alloc::{string::String, vec::Vec};
 use core::{mem, ops::Range};
 
