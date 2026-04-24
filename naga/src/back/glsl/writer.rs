@@ -364,7 +364,7 @@ impl<'a, W: Write> Writer<'a, W> {
                         .as_ref()
                         .and_then(|binding| binding.input_attachment_index);
                     let use_framebuffer_fetch =
-                        self.is_framebuffer_fetch_subpass_image(dim, class, input_attachment_index);
+                        self.is_framebuffer_fetch_subpass_image(class, input_attachment_index);
 
                     if use_framebuffer_fetch {
                         write!(self.out, "inout ")?;
@@ -611,26 +611,26 @@ impl<'a, W: Write> Writer<'a, W> {
 
     fn is_framebuffer_fetch_subpass_image(
         &self,
-        dim: crate::ImageDimension,
         class: crate::ImageClass,
         input_attachment_index: Option<u32>,
     ) -> bool {
         self.options.use_framebuffer_fetch
             && self.entry_point.stage == ShaderStage::Fragment
-            && dim == crate::ImageDimension::SubpassData
+            && class.is_subpass_input()
             && input_attachment_index.is_some()
-            && matches!(class, crate::ImageClass::Sampled { multi: false, .. })
+            && matches!(class, crate::ImageClass::SubpassInput { multi: false, .. })
     }
 
     fn write_framebuffer_fetch_type(&mut self, class: crate::ImageClass) -> BackendResult {
         match class {
-            crate::ImageClass::Sampled { kind, multi: false } => {
+            crate::ImageClass::SubpassInput { kind, multi: false } => {
                 let prefix = glsl_scalar(crate::Scalar { kind, width: 4 })?.prefix;
                 write!(self.out, "{prefix}vec4")?;
                 Ok(())
             }
             _ => Err(Error::Custom(
-                "Framebuffer fetch globals must be non-multisampled sampled images".to_string(),
+                "Framebuffer fetch globals must be non-multisampled subpass input images"
+                    .to_string(),
             )),
         }
     }
@@ -645,9 +645,9 @@ impl<'a, W: Write> Writer<'a, W> {
         arrayed: bool,
         class: crate::ImageClass,
     ) -> BackendResult {
-        if dim == crate::ImageDimension::SubpassData {
+        if class.is_subpass_input() {
             return match class {
-                crate::ImageClass::Sampled { kind, multi } => {
+                crate::ImageClass::SubpassInput { kind, multi } => {
                     let prefix = glsl_scalar(crate::Scalar { kind, width: 4 })?.prefix;
                     if multi {
                         write!(self.out, "{prefix}subpassInputMS")?;
@@ -656,7 +656,7 @@ impl<'a, W: Write> Writer<'a, W> {
                     }
                     Ok(())
                 }
-                crate::ImageClass::Depth { multi } => {
+                crate::ImageClass::SubpassInputDepth { multi } => {
                     if multi {
                         write!(self.out, "subpassInputMS")?;
                     } else {
@@ -665,8 +665,11 @@ impl<'a, W: Write> Writer<'a, W> {
                     Ok(())
                 }
                 crate::ImageClass::Storage { .. } | crate::ImageClass::External => Err(
-                    Error::Custom("SubpassData images must be sampled or depth".to_string()),
+                    Error::Custom("subpass input images must be sampled or depth".to_string()),
                 ),
+                crate::ImageClass::Sampled { .. } | crate::ImageClass::Depth { .. } => {
+                    unreachable!()
+                }
             };
         }
 
@@ -695,6 +698,7 @@ impl<'a, W: Write> Writer<'a, W> {
             Ic::Depth { multi: false } => ("sampler", float, "", "Shadow"),
             Ic::Storage { format, .. } => ("image", format.into(), "", ""),
             Ic::External => unimplemented!(),
+            Ic::SubpassInput { .. } | Ic::SubpassInputDepth { .. } => unreachable!(),
         };
 
         let precision = if self.options.version.is_es() {
@@ -2797,9 +2801,9 @@ impl<'a, W: Write> Writer<'a, W> {
                     } => (dim, class),
                     _ => unreachable!(),
                 };
-                if dim == crate::ImageDimension::SubpassData {
+                if class.is_subpass_input() {
                     return Err(Error::Custom(
-                        "ImageQuery on SubpassData is not supported in GLSL".to_string(),
+                        "ImageQuery on subpass input is not supported in GLSL".to_string(),
                     ));
                 }
                 let components = match dim {
@@ -2807,7 +2811,6 @@ impl<'a, W: Write> Writer<'a, W> {
                     crate::ImageDimension::D2 => 2,
                     crate::ImageDimension::D3 => 3,
                     crate::ImageDimension::Cube => 2,
-                    crate::ImageDimension::SubpassData => unreachable!(),
                 };
 
                 if let crate::ImageQuery::Size { .. } = query {
@@ -2856,6 +2859,8 @@ impl<'a, W: Write> Writer<'a, W> {
                                 self.write_expr(image, ctx)?;
                             }
                             ImageClass::External => unimplemented!(),
+                            ImageClass::SubpassInput { .. }
+                            | ImageClass::SubpassInputDepth { .. } => unreachable!(),
                         }
                         write!(self.out, ")")?;
                         if components != 1 || self.options.version.is_es() {
@@ -2872,6 +2877,8 @@ impl<'a, W: Write> Writer<'a, W> {
                             ImageClass::Sampled { .. } | ImageClass::Depth { .. } => "textureSize",
                             ImageClass::Storage { .. } => "imageSize",
                             ImageClass::External => unimplemented!(),
+                            ImageClass::SubpassInput { .. }
+                            | ImageClass::SubpassInputDepth { .. } => unreachable!(),
                         };
                         write!(self.out, "{fun_name}(")?;
                         self.write_expr(image, ctx)?;
@@ -2892,6 +2899,8 @@ impl<'a, W: Write> Writer<'a, W> {
                             }
                             ImageClass::Storage { .. } => "imageSamples",
                             ImageClass::External => unimplemented!(),
+                            ImageClass::SubpassInput { .. }
+                            | ImageClass::SubpassInputDepth { .. } => unreachable!(),
                         };
                         write!(self.out, "{fun_name}(")?;
                         self.write_expr(image, ctx)?;
@@ -3938,7 +3947,7 @@ impl<'a, W: Write> Writer<'a, W> {
         // Get how many components the coordinate vector needs for the dimensions only
         let tex_coord_size = match dim {
             crate::ImageDimension::D1 => 1,
-            crate::ImageDimension::D2 | crate::ImageDimension::SubpassData => 2,
+            crate::ImageDimension::D2 => 2,
             crate::ImageDimension::D3 => 3,
             crate::ImageDimension::Cube => 2,
         };
@@ -4153,10 +4162,10 @@ impl<'a, W: Write> Writer<'a, W> {
         // and the policy to be used with it.
         let (fun_name, policy) = match class {
             // Sampled images inherit the policy from the user passed policies
-            crate::ImageClass::Sampled { .. } if dim == crate::ImageDimension::SubpassData => {
+            crate::ImageClass::SubpassInput { .. } => {
                 ("subpassLoad", proc::BoundsCheckPolicy::Unchecked)
             }
-            crate::ImageClass::Depth { .. } if dim == crate::ImageDimension::SubpassData => {
+            crate::ImageClass::SubpassInputDepth { .. } => {
                 ("subpassLoad", proc::BoundsCheckPolicy::Unchecked)
             }
             crate::ImageClass::Sampled { .. } => ("texelFetch", self.policies.image_load),
@@ -4185,17 +4194,17 @@ impl<'a, W: Write> Writer<'a, W> {
             crate::ImageClass::External => unimplemented!(),
         };
 
-        if dim == crate::ImageDimension::SubpassData {
+        if class.is_subpass_input() {
             if self.options.use_framebuffer_fetch
                 && self.entry_point.stage == ShaderStage::Fragment
-                && matches!(class, crate::ImageClass::Sampled { multi: false, .. })
+                && matches!(class, crate::ImageClass::SubpassInput { multi: false, .. })
             {
                 self.write_expr(image, ctx)?;
             } else {
                 write!(self.out, "{fun_name}(")?;
                 self.write_expr(image, ctx)?;
                 write!(self.out, ")")?;
-                if matches!(class, crate::ImageClass::Depth { .. }) {
+                if matches!(class, crate::ImageClass::SubpassInputDepth { .. }) {
                     write!(self.out, ".x")?;
                 }
             }

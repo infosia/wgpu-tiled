@@ -502,7 +502,7 @@ impl Writer {
                 arrayed,
                 class,
             } => {
-                if dim == crate::ImageDimension::SubpassData {
+                if class.is_subpass_input() {
                     self.capabilities_used
                         .insert(spirv::Capability::InputAttachment);
                 }
@@ -1934,6 +1934,8 @@ impl Writer {
                 let sampled = match class {
                     crate::ImageClass::Sampled { .. } => true,
                     crate::ImageClass::Depth { .. } => true,
+                    crate::ImageClass::SubpassInput { .. } => true,
+                    crate::ImageClass::SubpassInputDepth { .. } => true,
                     crate::ImageClass::Storage { format, .. } => {
                         self.request_image_format_capabilities(format.into())?;
                         false

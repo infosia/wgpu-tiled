@@ -360,14 +360,11 @@ impl LocalImageType {
             flags
         };
 
-        let spirv_dim = spirv::Dim::from(dim);
+        let mut spirv_dim = spirv::Dim::from(dim);
 
         match class {
             crate::ImageClass::Sampled { kind, multi } => {
-                let mut flags = make_flags(multi, ImageTypeFlags::SAMPLED);
-                if dim == crate::ImageDimension::SubpassData {
-                    flags.remove(ImageTypeFlags::SAMPLED);
-                }
+                let flags = make_flags(multi, ImageTypeFlags::SAMPLED);
                 LocalImageType {
                     sampled_type: crate::Scalar { kind, width: 4 },
                     dim: spirv_dim,
@@ -384,6 +381,29 @@ impl LocalImageType {
                 flags: make_flags(multi, ImageTypeFlags::DEPTH | ImageTypeFlags::SAMPLED),
                 image_format: spirv::ImageFormat::Unknown,
             },
+            crate::ImageClass::SubpassInput { kind, multi } => {
+                spirv_dim = spirv::Dim::DimSubpassData;
+                let mut flags = make_flags(multi, ImageTypeFlags::SAMPLED);
+                flags.remove(ImageTypeFlags::SAMPLED);
+                LocalImageType {
+                    sampled_type: crate::Scalar { kind, width: 4 },
+                    dim: spirv_dim,
+                    flags,
+                    image_format: spirv::ImageFormat::Unknown,
+                }
+            }
+            crate::ImageClass::SubpassInputDepth { multi } => {
+                spirv_dim = spirv::Dim::DimSubpassData;
+                LocalImageType {
+                    sampled_type: crate::Scalar {
+                        kind: crate::ScalarKind::Float,
+                        width: 4,
+                    },
+                    dim: spirv_dim,
+                    flags: make_flags(multi, ImageTypeFlags::DEPTH | ImageTypeFlags::SAMPLED),
+                    image_format: spirv::ImageFormat::Unknown,
+                }
+            }
             crate::ImageClass::Storage { format, access: _ } => LocalImageType {
                 sampled_type: format.into(),
                 dim: spirv_dim,

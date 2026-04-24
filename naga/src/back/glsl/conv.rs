@@ -197,7 +197,7 @@ pub(in crate::back::glsl) const fn glsl_dimension(dim: crate::ImageDimension) ->
 
     match dim {
         IDim::D1 => "1D",
-        IDim::D2 | IDim::SubpassData => "2D",
+        IDim::D2 => "2D",
         IDim::D3 => "3D",
         IDim::Cube => "Cube",
     }

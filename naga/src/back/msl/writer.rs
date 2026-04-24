@@ -296,24 +296,19 @@ impl Display for TypeContext<'_> {
                 arrayed,
                 class,
             } => {
-                if dim == crate::ImageDimension::SubpassData {
+                if class.is_subpass_input() {
                     match class {
-                        crate::ImageClass::Sampled { kind, .. } => {
+                        crate::ImageClass::SubpassInput { kind, .. } => {
                             put_numeric_type(
                                 out,
                                 crate::Scalar { kind, width: 4 },
                                 &[crate::VectorSize::Quad],
                             )?;
                         }
-                        crate::ImageClass::Depth { .. } => {
+                        crate::ImageClass::SubpassInputDepth { .. } => {
                             put_numeric_type(out, crate::Scalar::F32, &[])?;
                         }
-                        crate::ImageClass::Storage { format, .. } => {
-                            put_numeric_type(out, format.into(), &[crate::VectorSize::Quad])?;
-                        }
-                        crate::ImageClass::External => {
-                            put_numeric_type(out, crate::Scalar::F32, &[crate::VectorSize::Quad])?;
-                        }
+                        _ => unreachable!(),
                     }
                     return Ok(());
                 }
@@ -323,7 +318,6 @@ impl Display for TypeContext<'_> {
                     crate::ImageDimension::D2 => "2d",
                     crate::ImageDimension::D3 => "3d",
                     crate::ImageDimension::Cube => "cube",
-                    crate::ImageDimension::SubpassData => unreachable!(),
                 };
                 let (texture_str, msaa_str, scalar, access) = match class {
                     crate::ImageClass::Sampled { kind, multi } => {
@@ -371,6 +365,8 @@ impl Display for TypeContext<'_> {
                     crate::ImageClass::External => {
                         return write!(out, "{EXTERNAL_TEXTURE_WRAPPER_STRUCT}");
                     }
+                    crate::ImageClass::SubpassInput { .. }
+                    | crate::ImageClass::SubpassInputDepth { .. } => unreachable!(),
                 };
                 let base_name = scalar.to_msl_name();
                 let array_str = if arrayed { "_array" } else { "" };
@@ -1191,13 +1187,6 @@ impl<W: Write> Writer<W> {
                 self.put_image_query(image, "height", level, context)?;
                 write!(self.out, ")")?;
             }
-            crate::ImageDimension::SubpassData => {
-                write!(self.out, "{NAMESPACE}::{coordinate_type}2(")?;
-                self.put_image_query(image, "width", level, context)?;
-                write!(self.out, ", ")?;
-                self.put_image_query(image, "height", level, context)?;
-                write!(self.out, ")")?;
-            }
             crate::ImageDimension::D3 => {
                 write!(self.out, "{NAMESPACE}::{coordinate_type}3(")?;
                 self.put_image_query(image, "width", level, context)?;
@@ -1425,11 +1414,10 @@ impl<W: Write> Writer<W> {
         mut address: TexelAddress,
         context: &ExpressionContext,
     ) -> BackendResult {
-        if let crate::TypeInner::Image {
-            dim: crate::ImageDimension::SubpassData,
-            ..
-        } = *context.resolve_type(image)
-        {
+        if matches!(
+            *context.resolve_type(image),
+            crate::TypeInner::Image { class, .. } if class.is_subpass_input()
+        ) {
             self.put_expression(image, context, false)?;
             return Ok(());
         }
@@ -7425,6 +7413,8 @@ template <typename A>
                                 crate::TypeInner::Image { class, .. } => match class {
                                     crate::ImageClass::Sampled { .. }
                                     | crate::ImageClass::Depth { .. }
+                                    | crate::ImageClass::SubpassInput { .. }
+                                    | crate::ImageClass::SubpassInputDepth { .. }
                                     | crate::ImageClass::Storage {
                                         access: crate::StorageAccess::LOAD,
                                         ..

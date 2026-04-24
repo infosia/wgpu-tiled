@@ -110,17 +110,17 @@ impl Load {
     fn from_image_expr(
         ctx: &mut BlockContext<'_>,
         image_id: Word,
-        image_dim: crate::ImageDimension,
         image_class: crate::ImageClass,
         result_type_id: Word,
     ) -> Result<Load, Error> {
-        let opcode = match (image_dim, image_class) {
-            (crate::ImageDimension::SubpassData, _) => spirv::Op::ImageRead,
-            (_, crate::ImageClass::Storage { .. }) => spirv::Op::ImageRead,
-            (_, crate::ImageClass::Depth { .. } | crate::ImageClass::Sampled { .. }) => {
+        let opcode = match image_class {
+            crate::ImageClass::Storage { .. }
+            | crate::ImageClass::SubpassInput { .. }
+            | crate::ImageClass::SubpassInputDepth { .. } => spirv::Op::ImageRead,
+            crate::ImageClass::Depth { .. } | crate::ImageClass::Sampled { .. } => {
                 spirv::Op::ImageFetch
             }
-            (_, crate::ImageClass::External) => unimplemented!(),
+            crate::ImageClass::External => unimplemented!(),
         };
 
         // `OpImageRead` and `OpImageFetch` instructions produce vec4<f32>
@@ -129,10 +129,11 @@ impl Load {
         // image produces a scalar `f32`, so in that case we need to find
         // the right SPIR-V type for the access instruction here.
         let type_id = match image_class {
-            crate::ImageClass::Depth { .. } => ctx.get_numeric_type_id(NumericType::Vector {
-                size: crate::VectorSize::Quad,
-                scalar: crate::Scalar::F32,
-            }),
+            crate::ImageClass::Depth { .. } | crate::ImageClass::SubpassInputDepth { .. } => ctx
+                .get_numeric_type_id(NumericType::Vector {
+                    size: crate::VectorSize::Quad,
+                    scalar: crate::Scalar::F32,
+                }),
             _ => result_type_id,
         };
 
@@ -734,15 +735,15 @@ impl BlockContext<'_> {
     ) -> Result<Word, Error> {
         let image_id = self.get_handle_id(image);
         let image_type = self.fun_info[image].ty.inner_with(&self.ir_module.types);
-        let (image_dim, image_class) = match *image_type {
-            crate::TypeInner::Image { dim, class, .. } => (dim, class),
+        let image_class = match *image_type {
+            crate::TypeInner::Image { class, .. } => class,
             _ => return Err(Error::Validation("image type")),
         };
 
-        let access = Load::from_image_expr(self, image_id, image_dim, image_class, result_type_id)?;
+        let access = Load::from_image_expr(self, image_id, image_class, result_type_id)?;
         let coordinates = self.write_image_coordinates(coordinate, array_index, block)?;
 
-        let (level_id, sample_id) = if image_dim == crate::ImageDimension::SubpassData {
+        let (level_id, sample_id) = if image_class.is_subpass_input() {
             (None, None)
         } else {
             (
@@ -751,7 +752,7 @@ impl BlockContext<'_> {
             )
         };
 
-        let bounds_check_policy = if image_dim == crate::ImageDimension::SubpassData {
+        let bounds_check_policy = if image_class.is_subpass_input() {
             crate::proc::BoundsCheckPolicy::Unchecked
         } else {
             self.writer.bounds_check_policies.image_load
@@ -1154,14 +1155,13 @@ impl BlockContext<'_> {
 
         let id = match query {
             Iq::Size { level } => {
-                if dim == Id::SubpassData {
+                if class.is_subpass_input() {
                     return Err(Error::Validation("image query size on subpass data"));
                 }
                 let dim_coords = match dim {
                     Id::D1 => 1,
                     Id::D2 | Id::Cube => 2,
                     Id::D3 => 3,
-                    Id::SubpassData => unreachable!(),
                 };
                 let array_coords = usize::from(arrayed);
                 let vector_size = match dim_coords + array_coords {
@@ -1241,7 +1241,7 @@ impl BlockContext<'_> {
             Iq::NumLayers => {
                 let vec_size = match dim {
                     Id::D1 => crate::VectorSize::Bi,
-                    Id::D2 | Id::Cube | Id::SubpassData => crate::VectorSize::Tri,
+                    Id::D2 | Id::Cube => crate::VectorSize::Tri,
                     Id::D3 => crate::VectorSize::Quad,
                 };
                 let extended_size_type_id = self.get_numeric_type_id(NumericType::Vector {

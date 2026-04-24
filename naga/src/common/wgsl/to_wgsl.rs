@@ -340,7 +340,7 @@ impl ToWgsl for crate::ImageDimension {
     fn to_wgsl(self) -> &'static str {
         match self {
             Self::D1 => "1d",
-            Self::D2 | Self::SubpassData => "2d",
+            Self::D2 => "2d",
             Self::D3 => "3d",
             Self::Cube => "cube",
         }

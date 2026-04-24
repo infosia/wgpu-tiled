@@ -937,7 +937,10 @@ impl super::Validator {
                                     ));
                                 }
                             }
-                            crate::ImageClass::Sampled { .. } | crate::ImageClass::Depth { .. } => {
+                            crate::ImageClass::Sampled { .. }
+                            | crate::ImageClass::Depth { .. }
+                            | crate::ImageClass::SubpassInput { .. }
+                            | crate::ImageClass::SubpassInputDepth { .. } => {
                                 if !self
                                     .capabilities
                                     .contains(Capabilities::TEXTURE_AND_SAMPLER_BINDING_ARRAY)

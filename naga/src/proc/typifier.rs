@@ -514,8 +514,12 @@ impl<'a> ResolveContext<'a> {
             crate::Expression::ImageSample { image, .. }
             | crate::Expression::ImageLoad { image, .. } => match *past(image)?.inner_with(types) {
                 Ti::Image { class, .. } => TypeResolution::Value(match class {
-                    crate::ImageClass::Depth { multi: _ } => Ti::Scalar(crate::Scalar::F32),
-                    crate::ImageClass::Sampled { kind, multi: _ } => Ti::Vector {
+                    crate::ImageClass::Depth { multi: _ }
+                    | crate::ImageClass::SubpassInputDepth { multi: _ } => {
+                        Ti::Scalar(crate::Scalar::F32)
+                    }
+                    crate::ImageClass::Sampled { kind, multi: _ }
+                    | crate::ImageClass::SubpassInput { kind, multi: _ } => Ti::Vector {
                         scalar: crate::Scalar { kind, width: 4 },
                         size: crate::VectorSize::Quad,
                     },
@@ -537,9 +541,7 @@ impl<'a> ResolveContext<'a> {
                 crate::ImageQuery::Size { level: _ } => match *past(image)?.inner_with(types) {
                     Ti::Image { dim, .. } => match dim {
                         crate::ImageDimension::D1 => Ti::Scalar(crate::Scalar::U32),
-                        crate::ImageDimension::D2
-                        | crate::ImageDimension::Cube
-                        | crate::ImageDimension::SubpassData => Ti::Vector {
+                        crate::ImageDimension::D2 | crate::ImageDimension::Cube => Ti::Vector {
                             size: crate::VectorSize::Bi,
                             scalar: crate::Scalar::U32,
                         },

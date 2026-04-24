@@ -180,6 +180,11 @@ impl<W: Write> super::Writer<'_, W> {
         arrayed: bool,
         class: crate::ImageClass,
     ) -> BackendResult {
+        if class.is_subpass_input() {
+            return Err(super::Error::Custom(
+                "subpass inputs are not supported by the HLSL backend".into(),
+            ));
+        }
         let access_str = match class {
             crate::ImageClass::Storage { .. } => "RW",
             _ => "",
@@ -206,6 +211,8 @@ impl<W: Write> super::Writer<'_, W> {
                     "external images should be handled by `write_global_external_texture`"
                 );
             }
+            crate::ImageClass::SubpassInput { .. }
+            | crate::ImageClass::SubpassInputDepth { .. } => unreachable!(),
         }
         Ok(())
     }
@@ -572,6 +579,12 @@ impl<W: Write> super::Writer<'_, W> {
             crate::ImageClass::Sampled { multi: false, .. } => "",
             crate::ImageClass::Storage { .. } => "RW",
             crate::ImageClass::External => "External",
+            crate::ImageClass::SubpassInput { .. }
+            | crate::ImageClass::SubpassInputDepth { .. } => {
+                return Err(super::Error::Custom(
+                    "subpass inputs are not supported by the HLSL backend".into(),
+                ));
+            }
         };
         let arrayed_str = if query.arrayed { "Array" } else { "" };
         let query_str = match query.query {
@@ -662,6 +675,12 @@ impl<W: Write> super::Writer<'_, W> {
                     crate::ImageClass::Storage { .. } => 0,
                     crate::ImageClass::Sampled { .. } | crate::ImageClass::Depth { .. } => 1,
                     crate::ImageClass::External => unreachable!(),
+                    crate::ImageClass::SubpassInput { .. }
+                    | crate::ImageClass::SubpassInputDepth { .. } => {
+                        return Err(super::Error::Custom(
+                            "subpass inputs are not supported by the HLSL backend".into(),
+                        ));
+                    }
                 };
 
                 // GetDimensions Overloaded Methods
@@ -670,7 +689,7 @@ impl<W: Write> super::Writer<'_, W> {
                     ImageQuery::Size | ImageQuery::SizeLevel => {
                         let ret = match wiq.dim {
                             IDim::D1 => "x",
-                            IDim::D2 | IDim::SubpassData => "xy",
+                            IDim::D2 => "xy",
                             IDim::D3 => "xyz",
                             IDim::Cube => "xy",
                         };

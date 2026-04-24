@@ -59,7 +59,6 @@
             binding: Some((
                 group: 0,
                 binding: 0,
-                input_attachment_index: None,
             )),
             ty: 2,
             init: None,
@@ -73,7 +72,6 @@
             binding: Some((
                 group: 0,
                 binding: 1,
-                input_attachment_index: None,
             )),
             ty: 2,
             init: None,

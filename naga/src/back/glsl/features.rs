@@ -412,7 +412,9 @@ impl<W> Writer<'_, W> {
 
                     match class {
                         ImageClass::Sampled { multi: true, .. }
-                        | ImageClass::Depth { multi: true } => {
+                        | ImageClass::Depth { multi: true }
+                        | ImageClass::SubpassInput { multi: true, .. }
+                        | ImageClass::SubpassInputDepth { multi: true } => {
                             self.features.request(Features::MULTISAMPLED_TEXTURES);
                             if arrayed {
                                 self.features.request(Features::MULTISAMPLED_TEXTURE_ARRAYS);
@@ -446,6 +448,8 @@ impl<W> Writer<'_, W> {
                         },
                         ImageClass::Sampled { multi: false, .. }
                         | ImageClass::Depth { multi: false }
+                        | ImageClass::SubpassInput { multi: false, .. }
+                        | ImageClass::SubpassInputDepth { multi: false }
                         | ImageClass::External => {}
                     }
                 }

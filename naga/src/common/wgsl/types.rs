@@ -219,13 +219,13 @@ where
             let dim_str = dim.to_wgsl();
             let arrayed_str = if arrayed { "_array" } else { "" };
             match class {
-                Ic::Sampled { kind, multi } => {
+                Ic::Sampled { kind, multi } | Ic::SubpassInput { kind, multi } => {
                     let multisampled_str = if multi { "multisampled_" } else { "" };
                     write!(out, "texture_{multisampled_str}{dim_str}{arrayed_str}<")?;
                     ctx.write_scalar(Scalar { kind, width: 4 }, out)?;
                     out.write_str(">")?;
                 }
-                Ic::Depth { multi } => {
+                Ic::Depth { multi } | Ic::SubpassInputDepth { multi } => {
                     let multisampled_str = if multi { "multisampled_" } else { "" };
                     write!(
                         out,

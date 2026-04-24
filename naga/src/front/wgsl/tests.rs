@@ -674,9 +674,9 @@ fn parse_input_attachment_index_binding() {
     assert!(matches!(
         module.types[global.ty].inner,
         crate::TypeInner::Image {
-            dim: crate::ImageDimension::SubpassData,
+            dim: crate::ImageDimension::D2,
             arrayed: false,
-            class: crate::ImageClass::Sampled { multi: false, .. },
+            class: crate::ImageClass::SubpassInput { multi: false, .. },
         }
     ));
 }

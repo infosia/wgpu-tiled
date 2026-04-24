@@ -2126,7 +2126,7 @@ impl Frontend {
         {
             let image_size = match dim {
                 Dim::D1 => None,
-                Dim::D2 | Dim::SubpassData => Some(VectorSize::Bi),
+                Dim::D2 => Some(VectorSize::Bi),
                 Dim::D3 => Some(VectorSize::Tri),
                 Dim::Cube => Some(VectorSize::Tri),
             };
@@ -2135,9 +2135,9 @@ impl Frontend {
                 _ => None,
             };
             let (shadow, storage) = match class {
-                ImageClass::Depth { .. } => (true, false),
+                ImageClass::Depth { .. } | ImageClass::SubpassInputDepth { .. } => (true, false),
                 ImageClass::Storage { .. } => (false, true),
-                ImageClass::Sampled { .. } => (false, false),
+                ImageClass::Sampled { .. } | ImageClass::SubpassInput { .. } => (false, false),
                 ImageClass::External => unreachable!(),
             };
 
@@ -2254,7 +2254,21 @@ pub fn sampled_to_depth(
                     Span::default(),
                 )
             }
+            ImageClass::SubpassInput { multi, .. } => {
+                *ty = ctx.module.types.insert(
+                    Type {
+                        name: None,
+                        inner: TypeInner::Image {
+                            dim,
+                            arrayed,
+                            class: ImageClass::SubpassInputDepth { multi },
+                        },
+                    },
+                    Span::default(),
+                )
+            }
             ImageClass::Depth { .. } => {}
+            ImageClass::SubpassInputDepth { .. } => {}
             // Other image classes aren't allowed to be transformed to depth
             ImageClass::Storage { .. } => errors.push(Error {
                 kind: ErrorKind::SemanticError("Not a texture".into()),

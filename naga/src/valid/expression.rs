@@ -543,6 +543,9 @@ impl super::Validator {
                 };
 
                 // check sampling and comparison properties
+                if class.is_subpass_input() {
+                    return Err(ExpressionError::InvalidImageClass(class));
+                }
                 let image_depth = match class {
                     crate::ImageClass::Sampled {
                         kind: crate::ScalarKind::Float,
@@ -556,11 +559,6 @@ impl super::Validator {
                     crate::ImageClass::Depth { multi: false } => true,
                     _ => return Err(ExpressionError::InvalidImageClass(class)),
                 };
-                if dim == crate::ImageDimension::SubpassData {
-                    log::warn!(
-                        "sampling from a `@input_attachment_index` image is accepted but may not be supported by all backends"
-                    );
-                }
                 if comparison != depth_ref.is_some() || (comparison && !image_depth) {
                     return Err(ExpressionError::ComparisonSamplingMismatch {
                         image: class,
@@ -572,7 +570,7 @@ impl super::Validator {
                 // check texture coordinates type
                 let num_components = match dim {
                     crate::ImageDimension::D1 => 1,
-                    crate::ImageDimension::D2 | crate::ImageDimension::SubpassData => 2,
+                    crate::ImageDimension::D2 => 2,
                     crate::ImageDimension::D3 | crate::ImageDimension::Cube => 3,
                 };
                 match resolver[coordinate] {
@@ -623,9 +621,7 @@ impl super::Validator {
 
                 if let Some(component) = gather {
                     match dim {
-                        crate::ImageDimension::D2
-                        | crate::ImageDimension::Cube
-                        | crate::ImageDimension::SubpassData => {}
+                        crate::ImageDimension::D2 | crate::ImageDimension::Cube => {}
                         crate::ImageDimension::D1 | crate::ImageDimension::D3 => {
                             return Err(ExpressionError::InvalidGatherDimension(dim))
                         }
@@ -795,10 +791,7 @@ impl super::Validator {
                 };
 
                 match resolver[coordinate].image_storage_coordinates() {
-                    Some(coord_dim)
-                        if coord_dim == dim
-                            || (dim == crate::ImageDimension::SubpassData
-                                && coord_dim == crate::ImageDimension::D2) => {}
+                    Some(coord_dim) if coord_dim == dim => {}
                     _ => return Err(ExpressionError::InvalidImageCoordinateType(dim, coordinate)),
                 };
                 if arrayed != array_index.is_some() {
@@ -825,22 +818,20 @@ impl super::Validator {
                     }
                 }
 
-                if dim != crate::ImageDimension::SubpassData {
-                    match (level, class.is_mipmapped()) {
-                        (None, false) => {}
-                        (Some(level), true) => match resolver[level] {
-                            Ti::Scalar(Sc {
-                                kind: Sk::Sint | Sk::Uint,
-                                width: _,
-                            }) => {}
-                            _ => return Err(ExpressionError::InvalidImageArrayIndexType(level)),
-                        },
-                        (Some(_), false) => {
-                            return Err(ExpressionError::InvalidImageLevelSelector);
-                        }
-                        (None, true) => {
-                            return Err(ExpressionError::MissingImageLevelSelector);
-                        }
+                match (level, class.is_mipmapped()) {
+                    (None, false) => {}
+                    (Some(level), true) => match resolver[level] {
+                        Ti::Scalar(Sc {
+                            kind: Sk::Sint | Sk::Uint,
+                            width: _,
+                        }) => {}
+                        _ => return Err(ExpressionError::InvalidImageArrayIndexType(level)),
+                    },
+                    (Some(_), false) => {
+                        return Err(ExpressionError::InvalidImageLevelSelector);
+                    }
+                    (None, true) => {
+                        return Err(ExpressionError::MissingImageLevelSelector);
                     }
                 }
                 ShaderStages::all()
@@ -851,9 +842,9 @@ impl super::Validator {
                     Ti::Image {
                         class,
                         arrayed,
-                        dim,
+                        dim: _,
                     } => {
-                        if dim == crate::ImageDimension::SubpassData {
+                        if class.is_subpass_input() {
                             return Err(ExpressionError::InvalidImageClass(class));
                         }
                         let good = match query {

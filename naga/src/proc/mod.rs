@@ -431,22 +431,36 @@ impl super::SwizzleComponent {
 impl super::ImageClass {
     pub const fn is_multisampled(self) -> bool {
         match self {
-            crate::ImageClass::Sampled { multi, .. } | crate::ImageClass::Depth { multi } => multi,
-            crate::ImageClass::Storage { .. } => false,
-            crate::ImageClass::External => false,
+            crate::ImageClass::Sampled { multi, .. }
+            | crate::ImageClass::Depth { multi }
+            | crate::ImageClass::SubpassInput { multi, .. }
+            | crate::ImageClass::SubpassInputDepth { multi } => multi,
+            crate::ImageClass::Storage { .. } | crate::ImageClass::External => false,
         }
     }
 
     pub const fn is_mipmapped(self) -> bool {
         match self {
             crate::ImageClass::Sampled { multi, .. } | crate::ImageClass::Depth { multi } => !multi,
-            crate::ImageClass::Storage { .. } => false,
-            crate::ImageClass::External => false,
+            crate::ImageClass::Storage { .. }
+            | crate::ImageClass::External
+            | crate::ImageClass::SubpassInput { .. }
+            | crate::ImageClass::SubpassInputDepth { .. } => false,
         }
     }
 
     pub const fn is_depth(self) -> bool {
-        matches!(self, crate::ImageClass::Depth { .. })
+        matches!(
+            self,
+            crate::ImageClass::Depth { .. } | crate::ImageClass::SubpassInputDepth { .. }
+        )
+    }
+
+    pub const fn is_subpass_input(self) -> bool {
+        matches!(
+            self,
+            crate::ImageClass::SubpassInput { .. } | crate::ImageClass::SubpassInputDepth { .. }
+        )
     }
 }
 

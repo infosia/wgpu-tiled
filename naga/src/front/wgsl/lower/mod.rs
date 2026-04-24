@@ -1346,18 +1346,18 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
                                     arrayed: false,
                                     class: ir::ImageClass::Sampled { kind, multi: false },
                                 } => ir::TypeInner::Image {
-                                    dim: ir::ImageDimension::SubpassData,
+                                    dim: ir::ImageDimension::D2,
                                     arrayed: false,
-                                    class: ir::ImageClass::Sampled { kind, multi: false },
+                                    class: ir::ImageClass::SubpassInput { kind, multi: false },
                                 },
                                 ir::TypeInner::Image {
                                     dim: ir::ImageDimension::D2,
                                     arrayed: false,
                                     class: ir::ImageClass::Depth { multi: false },
                                 } => ir::TypeInner::Image {
-                                    dim: ir::ImageDimension::SubpassData,
+                                    dim: ir::ImageDimension::D2,
                                     arrayed: false,
-                                    class: ir::ImageClass::Depth { multi: false },
+                                    class: ir::ImageClass::SubpassInputDepth { multi: false },
                                 },
                                 _ => {
                                     let span = binding
@@ -3474,13 +3474,6 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
                     let image = args.next()?;
                     let image_span = ctx.ast_expressions.get_span(image);
                     let image = self.expression(image, ctx)?;
-                    let is_subpass_data = matches!(
-                        *resolve_inner!(ctx, image),
-                        ir::TypeInner::Image {
-                            dim: ir::ImageDimension::SubpassData,
-                            ..
-                        }
-                    );
 
                     let coordinate = self.expression(args.next()?, ctx)?;
 
@@ -3492,7 +3485,8 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
                         })
                         .transpose()?;
 
-                    let level = (!is_subpass_data && class.is_mipmapped())
+                    let level = class
+                        .is_mipmapped()
                         .then(|| {
                             args.min_args += 1;
                             self.expression(args.next()?, ctx)
@@ -4482,11 +4476,13 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
                 let exact = match class {
                     // When applied to depth textures, `textureSampleLevel`'s
                     // `level` argument is an `i32` or `u32`.
-                    ir::ImageClass::Depth { .. } => self.expression(args.next()?, ctx)?,
+                    ir::ImageClass::Depth { .. } | ir::ImageClass::SubpassInputDepth { .. } => {
+                        self.expression(args.next()?, ctx)?
+                    }
 
                     // When applied to other sampled types, its `level` argument
                     // is an `f32`.
-                    ir::ImageClass::Sampled { .. } => {
+                    ir::ImageClass::Sampled { .. } | ir::ImageClass::SubpassInput { .. } => {
                         self.expression_with_leaf_scalar(args.next()?, ir::Scalar::F32, ctx)?
                     }
 

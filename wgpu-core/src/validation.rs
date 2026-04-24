@@ -675,9 +675,7 @@ impl Resource {
                 let view_dimension = match dim {
                     naga::ImageDimension::D1 => wgt::TextureViewDimension::D1,
                     naga::ImageDimension::D2 if arrayed => wgt::TextureViewDimension::D2Array,
-                    naga::ImageDimension::D2 | naga::ImageDimension::SubpassData => {
-                        wgt::TextureViewDimension::D2
-                    }
+                    naga::ImageDimension::D2 => wgt::TextureViewDimension::D2,
                     naga::ImageDimension::D3 => wgt::TextureViewDimension::D3,
                     naga::ImageDimension::Cube if arrayed => wgt::TextureViewDimension::CubeArray,
                     naga::ImageDimension::Cube => wgt::TextureViewDimension::Cube,
@@ -698,6 +696,25 @@ impl Resource {
                         multisampled: multi,
                     },
                     naga::ImageClass::Depth { multi } => BindingType::Texture {
+                        sample_type: wgt::TextureSampleType::Depth,
+                        view_dimension,
+                        multisampled: multi,
+                    },
+                    naga::ImageClass::SubpassInput { multi, kind } => BindingType::Texture {
+                        sample_type: match kind {
+                            naga::ScalarKind::Float => wgt::TextureSampleType::Float {
+                                filterable: is_reffed_by_sampler_in_entrypoint,
+                            },
+                            naga::ScalarKind::Sint => wgt::TextureSampleType::Sint,
+                            naga::ScalarKind::Uint => wgt::TextureSampleType::Uint,
+                            naga::ScalarKind::AbstractInt
+                            | naga::ScalarKind::AbstractFloat
+                            | naga::ScalarKind::Bool => unreachable!(),
+                        },
+                        view_dimension,
+                        multisampled: multi,
+                    },
+                    naga::ImageClass::SubpassInputDepth { multi } => BindingType::Texture {
                         sample_type: wgt::TextureSampleType::Depth,
                         view_dimension,
                         multisampled: multi,

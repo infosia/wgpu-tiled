@@ -175,9 +175,7 @@ impl crate::ImageDimension {
     const fn required_coordinate_size(&self) -> Option<crate::VectorSize> {
         match *self {
             crate::ImageDimension::D1 => None,
-            crate::ImageDimension::D2 | crate::ImageDimension::SubpassData => {
-                Some(crate::VectorSize::Bi)
-            }
+            crate::ImageDimension::D2 => Some(crate::VectorSize::Bi),
             crate::ImageDimension::D3 => Some(crate::VectorSize::Tri),
             crate::ImageDimension::Cube => Some(crate::VectorSize::Tri),
         }
@@ -2639,14 +2637,22 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
 
         let id = self.next()?;
         let sample_type_id = self.next()?;
-        let dim = self.next()?;
+        let dim_word = self.next()?;
         let is_depth = self.next()?;
         let is_array = self.next()? != 0;
         let is_msaa = self.next()? != 0;
         let is_sampled = self.next()?;
         let format = self.next()?;
 
-        let dim = map_image_dim(dim)?;
+        let is_subpass = matches!(
+            spirv::Dim::from_u32(dim_word),
+            Some(spirv::Dim::DimSubpassData)
+        );
+        let dim = if is_subpass {
+            crate::ImageDimension::D2
+        } else {
+            map_image_dim(dim_word)?
+        };
         let decor = self.future_decor.remove(&id).unwrap_or_default();
 
         // ensure there is a type for texture coordinate without extra components
@@ -2671,8 +2677,12 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
             .ok_or(Error::InvalidImageBaseType(base_handle))?;
 
         let inner = crate::TypeInner::Image {
-            class: if dim == crate::ImageDimension::SubpassData {
-                crate::ImageClass::Sampled { kind, multi: false }
+            class: if is_subpass {
+                if is_depth == 1 {
+                    crate::ImageClass::SubpassInputDepth { multi: false }
+                } else {
+                    crate::ImageClass::SubpassInput { kind, multi: false }
+                }
             } else if is_depth == 1 {
                 if is_sampled == 2 {
                     return Err(Error::InvalidImageDepthStorage);

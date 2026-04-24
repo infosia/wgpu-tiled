@@ -264,7 +264,6 @@
             binding: Some((
                 group: 0,
                 binding: 2,
-                input_attachment_index: None,
             )),
             ty: 5,
             init: None,
@@ -276,7 +275,6 @@
             binding: Some((
                 group: 0,
                 binding: 3,
-                input_attachment_index: None,
             )),
             ty: 13,
             init: None,
@@ -288,7 +286,6 @@
             binding: Some((
                 group: 0,
                 binding: 0,
-                input_attachment_index: None,
             )),
             ty: 8,
             init: None,
@@ -302,7 +299,6 @@
             binding: Some((
                 group: 0,
                 binding: 1,
-                input_attachment_index: None,
             )),
             ty: 12,
             init: None,

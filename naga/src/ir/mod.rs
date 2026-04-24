@@ -712,8 +712,6 @@ pub enum ImageDimension {
     D3,
     /// Cube map
     Cube,
-    /// Subpass input attachment image.
-    SubpassData,
 }
 
 bitflags::bitflags! {
@@ -833,6 +831,18 @@ pub enum ImageClass {
     },
     /// External texture.
     External,
+    /// Color subpass input (input attachment).
+    SubpassInput {
+        /// Kind of values to load.
+        kind: ScalarKind,
+        /// Multi-sampled image.
+        multi: bool,
+    },
+    /// Depth subpass input (input attachment).
+    SubpassInputDepth {
+        /// Multi-sampled depth image.
+        multi: bool,
+    },
     /// Storage image.
     Storage {
         format: StorageFormat,
@@ -1171,11 +1181,13 @@ pub struct ResourceBinding {
     pub group: u32,
     /// Binding number within the group.
     pub binding: u32,
-    /// Input attachment index for subpass-data images.
+    /// Input attachment index for subpass input images.
     ///
     /// This is the literal framebuffer color slot index used by WGSL
     /// `@input_attachment_index(N)` and backend-specific lowering (for example,
     /// MSL `[[color(N)]]` fragment inputs).
+    #[cfg_attr(feature = "serialize", serde(skip_serializing_if = "Option::is_none"))]
+    #[cfg_attr(feature = "deserialize", serde(default))]
     pub input_attachment_index: Option<u32>,
 }
 
