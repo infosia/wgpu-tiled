@@ -9,8 +9,8 @@ var gbuffer_material: texture_2d<f32>;
 
 @fragment
 fn main() -> @location(0) vec4<f32> {
-    let albedo = textureLoad(gbuffer_albedo, vec2<i32>(0, 0));
-    let normal = textureLoad(gbuffer_normal, vec2<i32>(0, 0));
-    let material = textureLoad(gbuffer_material, vec2<i32>(0, 0));
+    let albedo = subpassLoad(gbuffer_albedo);
+    let normal = subpassLoad(gbuffer_normal);
+    let material = subpassLoad(gbuffer_material);
     return (albedo + normal + material) / 3.0;
 }

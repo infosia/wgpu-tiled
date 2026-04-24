@@ -512,7 +512,8 @@ impl<'a> ResolveContext<'a> {
                 }
             },
             crate::Expression::ImageSample { image, .. }
-            | crate::Expression::ImageLoad { image, .. } => match *past(image)?.inner_with(types) {
+            | crate::Expression::ImageLoad { image, .. }
+            | crate::Expression::SubpassLoad { image } => match *past(image)?.inner_with(types) {
                 Ti::Image { class, .. } => TypeResolution::Value(match class {
                     crate::ImageClass::Depth { multi: _ }
                     | crate::ImageClass::SubpassInputDepth { multi: _ } => {

@@ -677,6 +677,10 @@ fn write_function_expressions(
                 }
                 ("ImageLoad".into(), 5)
             }
+            E::SubpassLoad { image } => {
+                edges.insert("image", image);
+                ("SubpassLoad".into(), 5)
+            }
             E::ImageQuery { image, query } => {
                 edges.insert("image", image);
                 let args = match query {

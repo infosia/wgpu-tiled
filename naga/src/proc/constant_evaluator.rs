@@ -1315,6 +1315,7 @@ impl<'a> ConstantEvaluator<'a> {
             Expression::GlobalVariable(_) => Err(ConstantEvaluatorError::GlobalVariable),
             Expression::ImageSample { .. }
             | Expression::ImageLoad { .. }
+            | Expression::SubpassLoad { .. }
             | Expression::ImageQuery { .. } => Err(ConstantEvaluatorError::ImageExpression),
             Expression::RayQueryProceedResult
             | Expression::RayQueryGetIntersection { .. }

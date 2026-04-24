@@ -3497,6 +3497,9 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
                     let coordinate = self.expression(args.next()?, ctx)?;
 
                     let (class, arrayed) = ctx.image_data(image, image_span)?;
+                    if class.is_subpass_input() {
+                        return Err(Box::new(Error::TextureLoadSubpassInput(image_span)));
+                    }
                     let array_index = arrayed
                         .then(|| {
                             args.min_args += 1;
@@ -3529,6 +3532,19 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
                         },
                         MustUse::Yes,
                     )
+                }
+                "subpassLoad" => {
+                    let mut args = ctx.prepare_args(arguments, 1, function_span);
+                    let image = args.next()?;
+                    let image_span = ctx.ast_expressions.get_span(image);
+                    let image = self.expression(image, ctx)?;
+                    let (class, _) = ctx.image_data(image, image_span)?;
+                    if !class.is_subpass_input() {
+                        return Err(Box::new(Error::SubpassLoadNonInputAttachment(image_span)));
+                    }
+                    args.finish()?;
+
+                    (ir::Expression::SubpassLoad { image }, MustUse::Yes)
                 }
                 "textureDimensions" => {
                     let mut args = ctx.prepare_args(arguments, 1, function_span);

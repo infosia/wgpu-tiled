@@ -20,8 +20,7 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let coord = vec2<i32>(in.position.xy);
-    let hdr = textureLoad(t_lit_color, coord).rgb;
+    let hdr = subpassLoad(t_lit_color).rgb;
 
     // Reinhard tonemapping (linear output — sRGB swapchain handles gamma)
     let mapped = hdr / (hdr + vec3<f32>(1.0));

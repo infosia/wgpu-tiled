@@ -420,17 +420,23 @@ impl<I: Iterator<Item = u32>> super::Frontend<I> {
         let image_lexp = self.lookup_expression.lookup(image_id)?;
         let image_ty = ctx.get_image_expr_ty(image_lexp.handle)?;
 
-        let coord_lexp = self.lookup_expression.lookup(coordinate_id)?;
-        let coord_handle =
-            self.get_expr_handle(coordinate_id, coord_lexp, ctx, emitter, block, body_idx);
-        let coord_type_handle = self.lookup_type.lookup(coord_lexp.type_id)?.handle;
-        let (coordinate, array_index, is_depth) = match ctx.module.types[image_ty].inner {
+        let (image_load_expr, is_depth) = match ctx.module.types[image_ty].inner {
+            crate::TypeInner::Image { class, .. } if class.is_subpass_input() => (
+                crate::Expression::SubpassLoad {
+                    image: image_lexp.handle,
+                },
+                class.is_depth(),
+            ),
             crate::TypeInner::Image {
                 dim,
                 arrayed,
                 class,
             } => {
-                let (coord, array_index) = extract_image_coordinates(
+                let coord_lexp = self.lookup_expression.lookup(coordinate_id)?;
+                let coord_handle =
+                    self.get_expr_handle(coordinate_id, coord_lexp, ctx, emitter, block, body_idx);
+                let coord_type_handle = self.lookup_type.lookup(coord_lexp.type_id)?.handle;
+                let (coordinate, array_index) = extract_image_coordinates(
                     dim,
                     if arrayed {
                         ExtraCoordinate::ArrayLayer
@@ -441,18 +447,20 @@ impl<I: Iterator<Item = u32>> super::Frontend<I> {
                     coord_type_handle,
                     ctx,
                 );
-                (coord, array_index, class.is_depth())
+                (
+                    crate::Expression::ImageLoad {
+                        image: image_lexp.handle,
+                        coordinate,
+                        array_index,
+                        sample,
+                        level,
+                    },
+                    class.is_depth(),
+                )
             }
             _ => return Err(Error::InvalidImage(image_ty)),
         };
 
-        let image_load_expr = crate::Expression::ImageLoad {
-            image: image_lexp.handle,
-            coordinate,
-            array_index,
-            sample,
-            level,
-        };
         let image_load_handle = ctx
             .expressions
             .append(image_load_expr, self.span_from_with_op(start));

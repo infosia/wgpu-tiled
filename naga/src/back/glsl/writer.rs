@@ -2785,6 +2785,7 @@ impl<'a, W: Write> Writer<'a, W> {
                 sample,
                 level,
             } => self.write_image_load(expr, ctx, image, coordinate, array_index, sample, level)?,
+            Expression::SubpassLoad { image } => self.write_subpass_load(ctx, image)?,
             // Query translates into one of the:
             // - textureSize/imageSize
             // - textureQueryLevels
@@ -4162,12 +4163,6 @@ impl<'a, W: Write> Writer<'a, W> {
         // and the policy to be used with it.
         let (fun_name, policy) = match class {
             // Sampled images inherit the policy from the user passed policies
-            crate::ImageClass::SubpassInput { .. } => {
-                ("subpassLoad", proc::BoundsCheckPolicy::Unchecked)
-            }
-            crate::ImageClass::SubpassInputDepth { .. } => {
-                ("subpassLoad", proc::BoundsCheckPolicy::Unchecked)
-            }
             crate::ImageClass::Sampled { .. } => ("texelFetch", self.policies.image_load),
             crate::ImageClass::Storage { .. } => {
                 // OpenGL ES 3.1 mentions in Chapter "8.22 Texture Image Loads and Stores" that:
@@ -4191,25 +4186,14 @@ impl<'a, W: Write> Writer<'a, W> {
                     "WGSL `textureLoad` from depth textures is not supported in GLSL".to_string(),
                 ))
             }
+            crate::ImageClass::SubpassInput { .. }
+            | crate::ImageClass::SubpassInputDepth { .. } => {
+                return Err(Error::Custom(
+                    "subpass input image used with ImageLoad".to_string(),
+                ))
+            }
             crate::ImageClass::External => unimplemented!(),
         };
-
-        if class.is_subpass_input() {
-            if self.options.use_framebuffer_fetch
-                && self.entry_point.stage == ShaderStage::Fragment
-                && matches!(class, crate::ImageClass::SubpassInput { multi: false, .. })
-            {
-                self.write_expr(image, ctx)?;
-            } else {
-                write!(self.out, "{fun_name}(")?;
-                self.write_expr(image, ctx)?;
-                write!(self.out, ")")?;
-                if matches!(class, crate::ImageClass::SubpassInputDepth { .. }) {
-                    write!(self.out, ".x")?;
-                }
-            }
-            return Ok(());
-        }
 
         // openGL es doesn't have 1D images so we need workaround it
         let tex_1d_hack = dim == IDim::D1 && self.options.version.is_es();
@@ -4419,6 +4403,49 @@ impl<'a, W: Write> Writer<'a, W> {
             write!(self.out, ")")?;
             // Close the parentheses surrounding our ternary
             write!(self.out, ")")?;
+        }
+
+        Ok(())
+    }
+
+    fn write_subpass_load(
+        &mut self,
+        ctx: &back::FunctionCtx,
+        image: Handle<crate::Expression>,
+    ) -> Result<(), Error> {
+        let class = match *ctx.resolve_type(image, &self.module.types) {
+            TypeInner::Image { class, .. } => class,
+            _ => return Err(Error::Custom("subpass load image type".to_string())),
+        };
+
+        match class {
+            crate::ImageClass::SubpassInput { multi: false, .. } => {
+                if self.options.use_framebuffer_fetch
+                    && self.entry_point.stage == ShaderStage::Fragment
+                {
+                    self.write_expr(image, ctx)?;
+                } else {
+                    write!(self.out, "subpassLoad(")?;
+                    self.write_expr(image, ctx)?;
+                    write!(self.out, ")")?;
+                }
+            }
+            crate::ImageClass::SubpassInputDepth { multi: false } => {
+                write!(self.out, "subpassLoad(")?;
+                self.write_expr(image, ctx)?;
+                write!(self.out, ").x")?;
+            }
+            crate::ImageClass::SubpassInput { .. }
+            | crate::ImageClass::SubpassInputDepth { .. } => {
+                return Err(Error::Custom(
+                    "multisampled subpass inputs are unsupported".to_string(),
+                ));
+            }
+            _ => {
+                return Err(Error::Custom(
+                    "non-subpass image used with SubpassLoad".to_string(),
+                ))
+            }
         }
 
         Ok(())

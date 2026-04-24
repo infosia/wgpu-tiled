@@ -584,6 +584,9 @@ impl super::Validator {
                     .check_dep_opt(sample)?
                     .check_dep_opt(level)?;
             }
+            crate::Expression::SubpassLoad { image } => {
+                handle.check_dep(image)?;
+            }
             crate::Expression::ImageQuery { image, query } => {
                 handle.check_dep(image)?;
                 match query {

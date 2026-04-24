@@ -803,6 +803,7 @@ impl super::Validator {
                             | Ex::Load { .. }
                             | Ex::ImageSample { .. }
                             | Ex::ImageLoad { .. }
+                            | Ex::SubpassLoad { .. }
                             | Ex::ImageQuery { .. }
                             | Ex::Unary { .. }
                             | Ex::Binary { .. }
@@ -1178,11 +1179,23 @@ impl super::Validator {
                     };
 
                     // It had better be a storage image, since we're writing to it.
-                    let crate::ImageClass::Storage { format, .. } = class else {
-                        return Err(FunctionError::InvalidImageStore(
-                            ExpressionError::InvalidImageClass(class),
-                        )
-                        .with_span_handle(image, context.expressions));
+                    let format = match class {
+                        crate::ImageClass::Storage { format, .. } => format,
+                        _ if class.is_subpass_input() => {
+                            return Err(FunctionError::InvalidImageStore(
+                                ExpressionError::InvalidSubpassOp {
+                                    op: "ImageStore",
+                                    class,
+                                },
+                            )
+                            .with_span_handle(image, context.expressions));
+                        }
+                        _ => {
+                            return Err(FunctionError::InvalidImageStore(
+                                ExpressionError::InvalidImageClass(class),
+                            )
+                            .with_span_handle(image, context.expressions));
+                        }
                     };
 
                     // The `coordinate` operand must be a vector of the appropriate size.
@@ -1429,6 +1442,15 @@ impl super::Validator {
                                         }
                                     }
                                     crate::TypeInner::Scalar(format.into())
+                                }
+                                _ if class.is_subpass_input() => {
+                                    return Err(FunctionError::InvalidImageAtomic(
+                                        ExpressionError::InvalidSubpassOp {
+                                            op: "ImageAtomic",
+                                            class,
+                                        },
+                                    )
+                                    .with_span_handle(image, context.expressions));
                                 }
                                 _ => {
                                     return Err(FunctionError::InvalidImageAtomic(

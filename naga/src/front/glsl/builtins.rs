@@ -408,6 +408,27 @@ pub fn inject_builtin(
             // Don't generate shadow nor multisampled images since they aren't supported
             texture_args_generator(variations.into(), f)
         }
+        "subpassLoad" => {
+            for kind in [Sk::Float, Sk::Sint, Sk::Uint] {
+                let image = TypeInner::Image {
+                    dim: Dim::D2,
+                    arrayed: false,
+                    class: ImageClass::SubpassInput { kind, multi: false },
+                };
+                declaration
+                    .overloads
+                    .push(module.add_builtin(vec![image], MacroCall::SubpassLoad));
+            }
+
+            let depth_image = TypeInner::Image {
+                dim: Dim::D2,
+                arrayed: false,
+                class: ImageClass::SubpassInputDepth { multi: false },
+            };
+            declaration
+                .overloads
+                .push(module.add_builtin(vec![depth_image], MacroCall::SubpassLoad));
+        }
         "imageStore" => {
             let f = |kind: Sk, dim, arrayed, _, _| {
                 // Naga doesn't support cube images and it's usefulness
@@ -1558,6 +1579,7 @@ pub enum MacroCall {
     ImageLoad {
         multi: bool,
     },
+    SubpassLoad,
     ImageStore,
     MathFunction(MathFunction),
     FindLsbUint,
@@ -1816,6 +1838,9 @@ impl MacroCall {
                     },
                     Span::default(),
                 )?
+            }
+            MacroCall::SubpassLoad => {
+                ctx.add_expression(Expression::SubpassLoad { image: args[0] }, Span::default())?
             }
             MacroCall::ImageStore => {
                 let comps = frontend.coordinate_components(ctx, args[0], args[1], None, meta)?;

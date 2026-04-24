@@ -5200,3 +5200,100 @@ fn bitwise_shift_errors() {
         naga::valid::Capabilities::SHADER_INT64
     }
 }
+
+#[test]
+fn subpass_input_invalid_operations() {
+    check_validation! {
+        r#"
+            @group(0) @binding(0) @input_attachment_index(0)
+            var gbuffer: texture_2d<f32>;
+
+            @group(0) @binding(1)
+            var samp: sampler;
+
+            @fragment
+            fn main() -> @location(0) vec4<f32> {
+                return textureSample(gbuffer, samp, vec2<f32>(0.5, 0.5));
+            }
+        "#:
+        Err(naga::valid::ValidationError::EntryPoint {
+            source: naga::valid::EntryPointError::Function(
+                naga::valid::FunctionError::Expression {
+                    source: naga::valid::ExpressionError::InvalidSubpassOp { op: "ImageSample", .. },
+                    ..
+                }
+            ),
+            ..
+        })
+    }
+
+    check_validation! {
+        r#"
+            @group(0) @binding(0) @input_attachment_index(0)
+            var gbuffer: texture_2d<f32>;
+
+            @fragment
+            fn main() -> @location(0) vec4<f32> {
+                _ = textureDimensions(gbuffer);
+                return vec4<f32>(0.0);
+            }
+        "#,
+        r#"
+            @group(0) @binding(0) @input_attachment_index(0)
+            var gbuffer: texture_2d<f32>;
+
+            @fragment
+            fn main() -> @location(0) vec4<f32> {
+                _ = textureNumLevels(gbuffer);
+                return vec4<f32>(0.0);
+            }
+        "#:
+        Err(naga::valid::ValidationError::EntryPoint {
+            source: naga::valid::EntryPointError::Function(
+                naga::valid::FunctionError::Expression {
+                    source: naga::valid::ExpressionError::InvalidSubpassOp { op: "ImageQuery", .. },
+                    ..
+                }
+            ),
+            ..
+        })
+    }
+}
+
+#[test]
+fn subpass_load_fragment_only() {
+    check_validation! {
+        r#"
+            @group(0) @binding(0) @input_attachment_index(0)
+            var gbuffer: texture_2d<f32>;
+
+            @vertex
+            fn main() -> @builtin(position) vec4<f32> {
+                _ = subpassLoad(gbuffer);
+                return vec4<f32>(0.0);
+            }
+        "#:
+        Err(naga::valid::ValidationError::EntryPoint {
+            stage: naga::ShaderStage::Vertex,
+            source: naga::valid::EntryPointError::ForbiddenStageOperations,
+            ..
+        })
+    }
+
+    check_validation! {
+        r#"
+            @group(0) @binding(0) @input_attachment_index(0)
+            var gbuffer: texture_2d<f32>;
+
+            @compute @workgroup_size(1)
+            fn main() {
+                _ = subpassLoad(gbuffer);
+            }
+        "#:
+        Err(naga::valid::ValidationError::EntryPoint {
+            stage: naga::ShaderStage::Compute,
+            source: naga::valid::EntryPointError::ForbiddenStageOperations,
+            ..
+        })
+    }
+}

@@ -99,7 +99,7 @@ evaluated. For example, you can evaluate a [`BinaryOperator::Add`] expression
 any time you like, as long as you give it the right operands. It's really only a
 very small set of expressions that are affected by timing:
 
--   [`Load`], [`ImageSample`], and [`ImageLoad`] expressions are influenced by
+-   [`Load`], [`ImageSample`], [`ImageLoad`], and [`SubpassLoad`] expressions are influenced by
     stores to the variables or images they access, and must execute at the
     proper time relative to them.
 
@@ -188,6 +188,7 @@ An override expression can be evaluated at pipeline creation time.
 [`GlobalVariable`]: Expression::GlobalVariable
 [`ImageLoad`]: Expression::ImageLoad
 [`ImageSample`]: Expression::ImageSample
+[`SubpassLoad`]: Expression::SubpassLoad
 [`Load`]: Expression::Load
 [`LocalVariable`]: Expression::LocalVariable
 
@@ -1834,6 +1835,15 @@ pub enum Expression {
         /// [`Sampled`]: ImageClass::Sampled
         /// [`Depth`]: ImageClass::Depth
         level: Option<Handle<Expression>>,
+    },
+
+    /// Load from a subpass input image at the current fragment position.
+    ///
+    /// This operation is valid only for [`ImageClass::SubpassInput`] and
+    /// [`ImageClass::SubpassInputDepth`] images.
+    SubpassLoad {
+        /// The subpass input image to read from.
+        image: Handle<Expression>,
     },
 
     /// Query information from an image.

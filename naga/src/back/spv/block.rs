@@ -1979,6 +1979,9 @@ impl BlockContext<'_> {
                 sample,
                 block,
             )?,
+            crate::Expression::SubpassLoad { image } => {
+                self.write_subpass_load(result_type_id, image, block)?
+            }
             crate::Expression::ImageSample {
                 image,
                 sampler,

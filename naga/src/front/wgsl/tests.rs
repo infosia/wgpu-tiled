@@ -724,7 +724,7 @@ fn parse_input_attachment_index_rejects_multisampled_depth_texture_2d() {
 }
 
 #[test]
-fn parse_input_attachment_texture_load_without_level() {
+fn parse_input_attachment_subpass_load() {
     let module = parse_str(
         "
         @group(0) @binding(0) @input_attachment_index(0)
@@ -732,16 +732,56 @@ fn parse_input_attachment_texture_load_without_level() {
 
         @fragment
         fn main() -> @location(0) vec4<f32> {
-            return textureLoad(gbuffer, vec2<i32>(0, 0));
+            return subpassLoad(gbuffer);
         }
         ",
     )
     .unwrap();
 
     let expressions = &&module.entry_points[0].function.expressions;
-    assert!(expressions.iter().any(|(_, expression)| {
-        matches!(expression, crate::Expression::ImageLoad { level: None, .. })
-    }));
+    assert!(expressions
+        .iter()
+        .any(|(_, expression)| { matches!(expression, crate::Expression::SubpassLoad { .. }) }));
+}
+
+#[test]
+fn parse_input_attachment_texture_load_rejected() {
+    use crate::front::wgsl::{error::Error, Frontend};
+
+    let shader = "
+        @group(0) @binding(0) @input_attachment_index(0)
+        var gbuffer: texture_2d<f32>;
+
+        @fragment
+        fn main() -> @location(0) vec4<f32> {
+            return textureLoad(gbuffer, vec2<i32>(0, 0));
+        }
+    ";
+    let result = Frontend::new().inner(shader);
+    assert!(matches!(
+        *result.unwrap_err(),
+        Error::TextureLoadSubpassInput(_)
+    ));
+}
+
+#[test]
+fn parse_subpass_load_rejects_non_input_attachment() {
+    use crate::front::wgsl::{error::Error, Frontend};
+
+    let shader = "
+        @group(0) @binding(0)
+        var tex: texture_2d<f32>;
+
+        @fragment
+        fn main() -> @location(0) vec4<f32> {
+            return subpassLoad(tex);
+        }
+    ";
+    let result = Frontend::new().inner(shader);
+    assert!(matches!(
+        *result.unwrap_err(),
+        Error::SubpassLoadNonInputAttachment(_)
+    ));
 }
 
 #[test]

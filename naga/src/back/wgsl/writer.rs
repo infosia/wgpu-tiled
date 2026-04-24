@@ -721,6 +721,7 @@ impl<W: Write> Writer<W> {
                         // Forcefully creating baking expressions in some cases to help with readability
                         let required_baking_expr = match *expr {
                             Expression::ImageLoad { .. }
+                            | Expression::SubpassLoad { .. }
                             | Expression::ImageQuery { .. }
                             | Expression::ImageSample { .. } => true,
                             _ => false,
@@ -1695,6 +1696,11 @@ impl<W: Write> Writer<W> {
                     write!(self.out, ", ")?;
                     self.write_expr(module, index, func_ctx)?;
                 }
+                write!(self.out, ")")?;
+            }
+            Expression::SubpassLoad { image } => {
+                write!(self.out, "subpassLoad(")?;
+                self.write_expr(module, image, func_ctx)?;
                 write!(self.out, ")")?;
             }
             Expression::GlobalVariable(handle) => {

@@ -81,6 +81,11 @@ pub enum ExpressionError {
     ExpectedSamplerType(Handle<crate::Type>),
     #[error("Unable to operate on image class {0:?}")]
     InvalidImageClass(crate::ImageClass),
+    #[error("Operation {op} is not supported for subpass input image class {class:?}")]
+    InvalidSubpassOp {
+        op: &'static str,
+        class: crate::ImageClass,
+    },
     #[error("Image atomics are not supported for storage format {0:?}")]
     InvalidImageFormat(crate::StorageFormat),
     #[error("Image atomics require atomic storage access, {0:?} is insufficient")]
@@ -544,7 +549,10 @@ impl super::Validator {
 
                 // check sampling and comparison properties
                 if class.is_subpass_input() {
-                    return Err(ExpressionError::InvalidImageClass(class));
+                    return Err(ExpressionError::InvalidSubpassOp {
+                        op: "ImageSample",
+                        class,
+                    });
                 }
                 let image_depth = match class {
                     crate::ImageClass::Sampled {
@@ -790,6 +798,13 @@ impl super::Validator {
                     return Err(ExpressionError::ExpectedImageType(ty));
                 };
 
+                if class.is_subpass_input() {
+                    return Err(ExpressionError::InvalidSubpassOp {
+                        op: "ImageLoad",
+                        class,
+                    });
+                }
+
                 match resolver[coordinate].image_storage_coordinates() {
                     Some(coord_dim) if coord_dim == dim => {}
                     _ => return Err(ExpressionError::InvalidImageCoordinateType(dim, coordinate)),
@@ -836,6 +851,30 @@ impl super::Validator {
                 }
                 ShaderStages::all()
             }
+            E::SubpassLoad { image } => {
+                let ty = Self::global_var_ty(module, function, image)?;
+                let Ti::Image { class, .. } = module.types[ty].inner else {
+                    return Err(ExpressionError::ExpectedImageType(ty));
+                };
+
+                match class {
+                    crate::ImageClass::SubpassInput { multi: false, .. }
+                    | crate::ImageClass::SubpassInputDepth { multi: false } => {}
+                    // TODO: support multisampled subpass loads in a follow-up.
+                    crate::ImageClass::SubpassInput { .. }
+                    | crate::ImageClass::SubpassInputDepth { .. } => {
+                        return Err(ExpressionError::InvalidSubpassOp {
+                            op: "SubpassLoad",
+                            class,
+                        });
+                    }
+                    _ => {
+                        return Err(ExpressionError::InvalidImageClass(class));
+                    }
+                }
+
+                ShaderStages::FRAGMENT
+            }
             E::ImageQuery { image, query } => {
                 let ty = Self::global_var_ty(module, function, image)?;
                 match module.types[ty].inner {
@@ -845,7 +884,10 @@ impl super::Validator {
                         dim: _,
                     } => {
                         if class.is_subpass_input() {
-                            return Err(ExpressionError::InvalidImageClass(class));
+                            return Err(ExpressionError::InvalidSubpassOp {
+                                op: "ImageQuery",
+                                class,
+                            });
                         }
                         let good = match query {
                             crate::ImageQuery::NumLayers => arrayed,

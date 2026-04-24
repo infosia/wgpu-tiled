@@ -739,24 +739,15 @@ impl BlockContext<'_> {
             crate::TypeInner::Image { class, .. } => class,
             _ => return Err(Error::Validation("image type")),
         };
+        if image_class.is_subpass_input() {
+            return Err(Error::Validation("subpass input image used with ImageLoad"));
+        }
 
         let access = Load::from_image_expr(self, image_id, image_class, result_type_id)?;
         let coordinates = self.write_image_coordinates(coordinate, array_index, block)?;
-
-        let (level_id, sample_id) = if image_class.is_subpass_input() {
-            (None, None)
-        } else {
-            (
-                level.map(|expr| self.cached[expr]),
-                sample.map(|expr| self.cached[expr]),
-            )
-        };
-
-        let bounds_check_policy = if image_class.is_subpass_input() {
-            crate::proc::BoundsCheckPolicy::Unchecked
-        } else {
-            self.writer.bounds_check_policies.image_load
-        };
+        let level_id = level.map(|expr| self.cached[expr]);
+        let sample_id = sample.map(|expr| self.cached[expr]);
+        let bounds_check_policy = self.writer.bounds_check_policies.image_load;
 
         // Perform the access, according to the bounds check policy.
         let access_id = match bounds_check_policy {
@@ -809,6 +800,50 @@ impl BlockContext<'_> {
         };
 
         Ok(result_id)
+    }
+
+    pub(super) fn write_subpass_load(
+        &mut self,
+        result_type_id: Word,
+        image: Handle<crate::Expression>,
+        block: &mut Block,
+    ) -> Result<Word, Error> {
+        let image_id = self.get_handle_id(image);
+        let image_type = self.fun_info[image].ty.inner_with(&self.ir_module.types);
+        let image_class = match *image_type {
+            crate::TypeInner::Image { class, .. } => class,
+            _ => return Err(Error::Validation("image type")),
+        };
+        if !image_class.is_subpass_input() {
+            return Err(Error::Validation("non-subpass image used with SubpassLoad"));
+        }
+
+        let access = Load::from_image_expr(self, image_id, image_class, result_type_id)?;
+
+        let zero = self.get_scope_constant(0);
+        let coordinates = self.writer.get_constant_composite(
+            LookupType::Local(LocalType::Numeric(NumericType::Vector {
+                size: crate::VectorSize::Bi,
+                scalar: crate::Scalar::I32,
+            })),
+            &[zero, zero],
+        );
+        let access_id = access.generate(&mut self.writer.id_gen, coordinates, None, None, block);
+
+        if result_type_id == access.result_type() {
+            Ok(access_id)
+        } else {
+            let component_id = self.gen_id();
+            // Depth input attachments are emitted as vector reads in SPIR-V.
+            // Extract component 0 for naga's scalar depth result type.
+            block.body.push(Instruction::composite_extract(
+                result_type_id,
+                component_id,
+                access_id,
+                &[0],
+            ));
+            Ok(component_id)
+        }
     }
 
     /// Generate code for an `ImageSample` expression.

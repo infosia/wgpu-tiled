@@ -298,7 +298,9 @@ impl crate::Expression {
             // accesses are never cached, only loads are
             crate::Expression::Access { .. } | crate::Expression::AccessIndex { .. } => usize::MAX,
             // sampling may use the control flow, and image ops look better by themselves
-            crate::Expression::ImageSample { .. } | crate::Expression::ImageLoad { .. } => 1,
+            crate::Expression::ImageSample { .. }
+            | crate::Expression::ImageLoad { .. }
+            | crate::Expression::SubpassLoad { .. } => 1,
             // derivatives use the control flow
             crate::Expression::Derivative { .. } => 1,
             // TODO: We need a better fix for named `Load` expressions

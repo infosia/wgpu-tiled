@@ -188,6 +188,8 @@ pub(crate) enum Error<'a> {
     BadAccessor(Span),
     BadTexture(Span),
     UnsupportedMultisampledInputAttachment(Span),
+    TextureLoadSubpassInput(Span),
+    SubpassLoadNonInputAttachment(Span),
     BadTypeCast {
         span: Span,
         from_type: String,
@@ -632,6 +634,22 @@ impl<'a> Error<'a> {
                 labels: vec![(
                     span,
                     "this input attachment uses a multisampled texture".into(),
+                )],
+                notes: vec![],
+            },
+            Error::TextureLoadSubpassInput(span) => ParseError {
+                message: "textureLoad cannot be used with input attachments".to_string(),
+                labels: vec![(
+                    span,
+                    "use subpassLoad(input_attachment) instead".into(),
+                )],
+                notes: vec![],
+            },
+            Error::SubpassLoadNonInputAttachment(span) => ParseError {
+                message: "subpassLoad requires an input attachment".to_string(),
+                labels: vec![(
+                    span,
+                    "this texture is not declared with @input_attachment_index".into(),
                 )],
                 notes: vec![],
             },

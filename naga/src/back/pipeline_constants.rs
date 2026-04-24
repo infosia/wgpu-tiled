@@ -579,6 +579,9 @@ fn adjust_expr(new_pos: &HandleVec<Expression, Handle<Expression>>, expr: &mut E
                 adjust(e);
             }
         }
+        Expression::SubpassLoad { ref mut image } => {
+            adjust(image);
+        }
         Expression::ImageQuery {
             ref mut image,
             ref mut query,

@@ -747,6 +747,10 @@ impl FunctionInfo {
                     requirements: UniformityRequirements::empty(),
                 }
             }
+            E::SubpassLoad { image } => Uniformity {
+                non_uniform_result: self.add_ref(image),
+                requirements: UniformityRequirements::empty(),
+            },
             E::ImageQuery { image, query } => {
                 let query_nur = match query {
                     crate::ImageQuery::Size { level: Some(h) } => self.add_ref(h),

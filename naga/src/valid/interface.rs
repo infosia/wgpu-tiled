@@ -29,6 +29,10 @@ pub enum GlobalVariableError {
     UnsupportedCapability(Capabilities),
     #[error("Binding decoration is missing or not applicable")]
     InvalidBinding,
+    #[error("`@input_attachment_index` must be present if and only if the variable type is a subpass input image")]
+    InvalidInputAttachmentIndex,
+    #[error("Subpass input variables must be declared in the `handle` address space, found {0:?}")]
+    InvalidSubpassInputAddressSpace(crate::AddressSpace),
     #[error("Alignment requirements for address space {0:?} are not met by {1:?}")]
     Alignment(
         crate::AddressSpace,
@@ -191,6 +195,8 @@ pub enum EntryPointError {
     RayPayloadInInvalidStage(crate::ShaderStage),
     #[error("Only the `closest_hit`, `any_hit`, and `miss` shader stages can access a global variable in the `incoming_ray_payload` address space")]
     IncomingRayPayloadInInvalidStage(crate::ShaderStage),
+    #[error("Subpass input variables can only be used from fragment entry points, not {0:?}")]
+    SubpassInputInInvalidStage(crate::ShaderStage),
 }
 
 fn storage_usage(access: crate::StorageAccess) -> GlobalUse {
@@ -1175,6 +1181,22 @@ impl super::Validator {
             }
         }
 
+        let is_subpass_input = matches!(
+            gctx.types[inner_ty].inner,
+            crate::TypeInner::Image { class, .. } if class.is_subpass_input()
+        );
+        let has_input_attachment_index = var
+            .binding
+            .is_some_and(|binding| binding.input_attachment_index.is_some());
+        if is_subpass_input != has_input_attachment_index {
+            return Err(GlobalVariableError::InvalidInputAttachmentIndex);
+        }
+        if is_subpass_input && var.space != crate::AddressSpace::Handle {
+            return Err(GlobalVariableError::InvalidSubpassInputAddressSpace(
+                var.space,
+            ));
+        }
+
         Ok(())
     }
 
@@ -1442,6 +1464,21 @@ impl super::Validator {
             let usage = info[var_handle];
             if usage.is_empty() {
                 continue;
+            }
+
+            let is_subpass_input = match module.types[var.ty].inner {
+                crate::TypeInner::Image { class, .. } => class.is_subpass_input(),
+                crate::TypeInner::BindingArray { base, .. } => {
+                    matches!(
+                        module.types[base].inner,
+                        crate::TypeInner::Image { class, .. } if class.is_subpass_input()
+                    )
+                }
+                _ => false,
+            };
+            if is_subpass_input && ep.stage != crate::ShaderStage::Fragment {
+                return Err(EntryPointError::SubpassInputInInvalidStage(ep.stage)
+                    .with_span_handle(var_handle, &module.global_variables));
             }
 
             if var.space == crate::AddressSpace::TaskPayload {

@@ -179,6 +179,9 @@ impl ExpressionTracer<'_> {
                 self.expressions_used.insert_iter(sample);
                 self.expressions_used.insert_iter(level);
             }
+            Ex::SubpassLoad { image } => {
+                self.expressions_used.insert(image);
+            }
             Ex::ImageQuery { image, ref query } => {
                 self.expressions_used.insert(image);
                 use crate::ImageQuery as Iq;
@@ -356,6 +359,7 @@ impl ModuleMap {
                 operand_map.adjust_option(sample);
                 operand_map.adjust_option(level);
             }
+            Ex::SubpassLoad { ref mut image } => adjust(image),
             Ex::ImageQuery {
                 ref mut image,
                 ref mut query,

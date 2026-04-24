@@ -11,6 +11,6 @@ struct main_Output {
 fragment main_Output main_(
   metal::uint4 gbuffer_uint [[color(3)]]
 ) {
-    metal::uint4 _e4 = gbuffer_uint;
-    return main_Output { _e4 };
+    metal::uint4 _e1 = gbuffer_uint;
+    return main_Output { _e1 };
 }

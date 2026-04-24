@@ -3522,6 +3522,11 @@ impl<'a, W: fmt::Write> super::Writer<'a, W> {
                 sample,
                 level,
             )?,
+            Expression::SubpassLoad { .. } => {
+                return Err(Error::Custom(
+                    "subpass inputs are not supported by the HLSL backend".to_string(),
+                ))
+            }
             Expression::GlobalVariable(handle) => {
                 let global_variable = &module.global_variables[handle];
                 let ty = &module.types[global_variable.ty].inner;

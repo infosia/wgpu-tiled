@@ -44,7 +44,7 @@ These decisions were made upfront and shape the entire implementation:
 
 6. **Naga: direct modification** of backends, not post-transpilation string fixup. We own the fork.
 
-7. **WGSL syntax: `@input_attachment_index(N)`** — custom extension, fully implemented in naga WGSL frontend.
+7. **WGSL syntax: `@input_attachment_index(N)` + `subpassLoad(...)`** — custom extension, fully implemented in naga WGSL frontend.
 
 8. **GLES shader variants: compile-time flag** — `use_framebuffer_fetch: bool` on naga's GLSL `Options` struct.
 
@@ -540,13 +540,13 @@ All match arms on `ImageDimension` updated across every backend and frontend (25
 
 ### WGSL Frontend (`front/wgsl/lower/mod.rs`)
 
-**`@input_attachment_index(N)` parsing implemented.** The WGSL frontend recognizes the custom attribute on texture variables and populates `ResourceBinding::input_attachment_index`. Combined with `texture_2d<f32>` type, the variable is lowered as a `SubpassData` image in the naga IR.
+**`@input_attachment_index(N)` parsing implemented.** The WGSL frontend recognizes the custom attribute on texture variables and populates `ResourceBinding::input_attachment_index`. Combined with `texture_2d<...>` / `texture_depth_2d` type, the variable is lowered as a subpass-input image in naga IR and read via `subpassLoad(...)`.
 
 ### SPIR-V Backend (`back/spv/writer.rs`, `back/spv/image.rs`)
 
-- `InputAttachmentIndex` decoration emitted for SubpassData globals
+- `InputAttachmentIndex` decoration emitted for subpass-input globals
 - `DimSubpassData` used in `OpTypeImage` emission via `back/spv/instructions.rs`
-- **SubpassData bypasses bounds-check policies** — `OpImageQuerySize` is not valid for SubpassData images, so `Restrict` and `ReadZeroSkipWrite` policies would emit invalid SPIR-V. The backend always uses the unchecked path for SubpassData, passing `None` for level (coordinates and level are ignored by `OpImageRead` on SubpassData anyway).
+- **Subpass loads bypass bounds-check policies** — `OpImageQuerySize` is not valid for `SubpassData` images, so `Restrict` and `ReadZeroSkipWrite` policies would emit invalid SPIR-V. `subpassLoad(...)` is emitted as `OpImageRead` with a synthesized `(0, 0)` coordinate (required by SPIR-V but ignored for `SubpassData`).
 
 ### SPIR-V Frontend (`front/spv/convert.rs`, `front/spv/mod.rs`)
 
@@ -564,11 +564,11 @@ All match arms on `ImageDimension` updated across every backend and frontend (25
 
 **Subpass input code paths implemented:**
 - When `use_framebuffer_fetch: true` — emits `inout vec4` variables with `EXT_shader_framebuffer_fetch`
-- When `use_framebuffer_fetch: false` — emits `uniform subpassInput` with `subpassLoad()` / `texelFetch()` using `gl_FragCoord.xy`
+- When `use_framebuffer_fetch: false` — emits `uniform subpassInput` with `subpassLoad(...)`
 
 ### Naga Validation (`valid/expression.rs`)
 
-SubpassData images are allowed in `ImageLoad` expressions without requiring a valid sampler or level argument.
+Subpass input images are read with `SubpassLoad`; image sample/query/load/store/atomic operations are rejected for subpass inputs.
 
 ### WGSL Backend (`back/wgsl/writer.rs`)
 
@@ -847,6 +847,24 @@ GPU render time is ~12% higher with subpass mode. This is expected — Vulkan su
 3. **Public transient attachment handles** — `wgpu-core` and HAL expose `create_transient_attachment`, but the public `wgpu::Device` API still does not surface transient attachment objects. Current public usage relies on `TextureUsages::TRANSIENT` and the render-graph/subpass APIs.
 
 4. **DX12 subpass emulation** — Currently all stubs. Would need end-render-pass / begin-new-pass / bind-intermediates-as-SRVs approach.
+
+5. ~~**WGSL surface uses `textureLoad` for subpass inputs**~~ — **Fixed.** Subpass reads now use `subpassLoad(input_attachment)` and `textureLoad(...)` on input attachments is rejected.
+
+6. **SPIR-V `InputAttachmentIndex` is subpass-local, not render-pass-global** — `@input_attachment_index(N)` in WGSL means "slot N in the render-pass-global attachment list", but SPIR-V's `InputAttachmentIndex` decoration must be the Vulkan subpass-local index. The Vulkan HAL patches the decoration at pipeline-creation time to do this remap. That means naga cannot emit a final, standalone `.spv` for subpass shaders — the decoration value depends on which subpass the pipeline is used in. This is a design-level coupling between naga and the HAL that will not go away without rethinking the shader-module-vs-render-pass binding model.
+
+7. **MSAA subpass inputs — sample-frequency execution is not enforced** — The planned MSAA semantics say `subpassLoad(x)` on a multisampled input reads the *current sample only*. Under Vulkan this requires `sampleShadingEnable`; under Metal it requires the fragment function to reference `[[sample_id]]`. If the user writes an MSAA subpass-input shader that does not reference `@builtin(sample_index)`, the load silently returns sample 0 on some backends and a per-pixel average on others. No validator in naga or wgpu-core currently checks this. Until there is a rule (e.g. "MSAA subpass-input fragment shaders must declare `@builtin(sample_index)` as an input, even if unused"), MSAA subpass support is a foot-gun and should stay gated behind a capability flag.
+
+8. **No access to individual MSAA samples** — Vulkan's `subpassLoad(input, sample_index)` can read an arbitrary sample. Metal's `[[color(N)]]` framebuffer-fetch gives you the current sample only. The planned WGSL spec restricts to the Metal-expressible subset (current sample), which is the portable choice but blocks some MSAA deferred-shading techniques (edge-aware tone mapping, per-sample coverage weighting). A future Vulkan-only extension could unblock this, but would have no Metal path without falling back to a resolve texture — breaking the tile-memory contract. Decision: permanently out of scope unless a cross-backend story emerges.
+
+9. **Depth/stencil aspect split is not modeled** — Vulkan's `VkInputAttachmentAspectReference` lets two bindings target the same depth-stencil attachment with different aspects (depth vs stencil). Naga IR has `SubpassInputDepth` but no stencil counterpart. Reading the stencil aspect as a subpass input is currently unsupported; a `SubpassInputStencil { u32 }` image class would be the right extension point.
+
+10. **Layered / multiview subpass inputs** — Current IR assumes `Arrayed: false` for subpass inputs. Multiview rendering (XR, stereo) uses layered attachments where each view index maps to a layer. Combining multiview with subpass inputs needs an implicit layer resolve via the current view index. Not supported today; would require an IR extension when multiview becomes a requirement.
+
+11. **HLSL backend has no subpass-input path** — HLSL / DX12 has no direct equivalent of Vulkan input attachments or Metal framebuffer fetch. ROV (Rasterizer Ordered Views) has read-write semantics that don't match `subpassLoad`. The HLSL backend currently has no emission path for `SubpassInput*` images. This should be a hard compile error with a clear diagnostic ("HLSL backend does not support subpass inputs; use a separate render pass or enable a different backend"), not a silent fallthrough.
+
+12. **Tile-memory lifetime is not spelled out in the shader contract** — Whether a subpass input is valid after its producing subpass ends (i.e. whether it is backed by tile memory or DRAM) is currently implicit in `TextureUsages::TRANSIENT` and backend store-op choices. There is no user-visible statement in the shader-level docs that says "a subpass input is readable only during the current render pass, and only for the current fragment". Users coming from a texture-sampling background will trip over this. The shader-surface docs (this file and TILED-DESIGN.md) should state the lifetime and scope contract alongside the new `subpassLoad` builtin when that lands.
+
+13. **Diagnostic quality for misuse of subpass inputs** — A common mistake will be to call `textureDimensions(subpass_input)` to get screen size, or `textureSample(subpass_input, ...)` to read a neighbor fragment. Naga validation should reject these with messages that point the user at `@builtin(position)` (for screen-space coordinates) or "use a separate bind group and a regular sampled texture" (for neighbor access). Generic "invalid operation on image" errors are not good enough here.
 
 ---
 

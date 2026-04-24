@@ -33,15 +33,14 @@ struct LightParams {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let coord = vec2<i32>(in.position.xy);
-    let albedo_sample = textureLoad(t_albedo, coord);
+    let albedo_sample = subpassLoad(t_albedo);
 
     // Use albedo alpha to detect background (0.0 = background, 1.0 = geometry)
     if albedo_sample.a < 0.5 {
         return vec4<f32>(0.02, 0.02, 0.04, 1.0);
     }
 
-    let normal_sample = textureLoad(t_normal, coord);
+    let normal_sample = subpassLoad(t_normal);
     let albedo = albedo_sample.rgb;
     let raw_normal = normal_sample.xyz;
     // Guard against zero-length normal (e.g. cleared but not written).

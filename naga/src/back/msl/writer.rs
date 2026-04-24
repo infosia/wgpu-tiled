@@ -1418,8 +1418,9 @@ impl<W: Write> Writer<W> {
             *context.resolve_type(image),
             crate::TypeInner::Image { class, .. } if class.is_subpass_input()
         ) {
-            self.put_expression(image, context, false)?;
-            return Ok(());
+            return Err(Error::GenericValidation(
+                "subpass input image used with ImageLoad".into(),
+            ));
         }
 
         if let crate::TypeInner::Image {
@@ -1465,6 +1466,31 @@ impl<W: Write> Writer<W> {
         }
 
         Ok(())
+    }
+
+    fn put_subpass_load(
+        &mut self,
+        image: Handle<crate::Expression>,
+        context: &ExpressionContext,
+    ) -> BackendResult {
+        let class = match *context.resolve_type(image) {
+            crate::TypeInner::Image { class, .. } => class,
+            _ => return Err(Error::GenericValidation("subpass load image type".into())),
+        };
+        match class {
+            crate::ImageClass::SubpassInput { multi: false, .. }
+            | crate::ImageClass::SubpassInputDepth { multi: false } => {
+                self.put_expression(image, context, false)?;
+                Ok(())
+            }
+            crate::ImageClass::SubpassInput { .. }
+            | crate::ImageClass::SubpassInputDepth { .. } => Err(Error::GenericValidation(
+                "multisampled subpass inputs are unsupported".into(),
+            )),
+            _ => Err(Error::GenericValidation(
+                "non-subpass image used with SubpassLoad".into(),
+            )),
+        }
     }
 
     fn put_unchecked_image_load(
@@ -2201,6 +2227,9 @@ impl<W: Write> Writer<W> {
                     level: level.map(LevelOfDetail::Direct),
                 };
                 self.put_image_load(expr_handle, image, address, context)?;
+            }
+            crate::Expression::SubpassLoad { image } => {
+                self.put_subpass_load(image, context)?;
             }
             //Note: for all the queries, the signed integers are expected,
             // so a conversion is needed.
