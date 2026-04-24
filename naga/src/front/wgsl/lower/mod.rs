@@ -1340,6 +1340,10 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
                             .transpose()?;
 
                         if input_attachment_index.is_some() {
+                            let input_attachment_span = binding
+                                .input_attachment_index
+                                .map(|expr| ctx.ast_expressions.get_span(expr))
+                                .unwrap_or(span);
                             let image = match ctx.module.types[ty].inner {
                                 ir::TypeInner::Image {
                                     dim: ir::ImageDimension::D2,
@@ -1359,12 +1363,27 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
                                     arrayed: false,
                                     class: ir::ImageClass::SubpassInputDepth { multi: false },
                                 },
+                                ir::TypeInner::Image {
+                                    dim: ir::ImageDimension::D2,
+                                    arrayed: false,
+                                    class: ir::ImageClass::Sampled { multi: true, .. },
+                                }
+                                | ir::TypeInner::Image {
+                                    dim: ir::ImageDimension::D2,
+                                    arrayed: false,
+                                    class: ir::ImageClass::Depth { multi: true },
+                                } => {
+                                    // Multisampled input attachments still need backend-specific
+                                    // sample-selection semantics, so reject them until that
+                                    // behavior is implemented consistently.
+                                    return Err(Box::new(
+                                        Error::UnsupportedMultisampledInputAttachment(
+                                            input_attachment_span,
+                                        ),
+                                    ));
+                                }
                                 _ => {
-                                    let span = binding
-                                        .input_attachment_index
-                                        .map(|expr| ctx.ast_expressions.get_span(expr))
-                                        .unwrap_or(span);
-                                    return Err(Box::new(Error::BadTexture(span)));
+                                    return Err(Box::new(Error::BadTexture(input_attachment_span)));
                                 }
                             };
                             ty = ctx.ensure_type_exists(None, image);

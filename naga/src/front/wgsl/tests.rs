@@ -694,6 +694,36 @@ fn parse_input_attachment_index_requires_texture_2d() {
 }
 
 #[test]
+fn parse_input_attachment_index_rejects_multisampled_texture_2d() {
+    use crate::front::wgsl::{error::Error, Frontend};
+
+    let shader = "
+        @group(0) @binding(0) @input_attachment_index(0)
+        var gbuffer: texture_multisampled_2d<f32>;
+    ";
+    let result = Frontend::new().inner(shader);
+    assert!(matches!(
+        *result.unwrap_err(),
+        Error::UnsupportedMultisampledInputAttachment(_)
+    ));
+}
+
+#[test]
+fn parse_input_attachment_index_rejects_multisampled_depth_texture_2d() {
+    use crate::front::wgsl::{error::Error, Frontend};
+
+    let shader = "
+        @group(0) @binding(0) @input_attachment_index(0)
+        var gbuffer: texture_depth_multisampled_2d;
+    ";
+    let result = Frontend::new().inner(shader);
+    assert!(matches!(
+        *result.unwrap_err(),
+        Error::UnsupportedMultisampledInputAttachment(_)
+    ));
+}
+
+#[test]
 fn parse_input_attachment_texture_load_without_level() {
     let module = parse_str(
         "

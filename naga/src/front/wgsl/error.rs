@@ -187,6 +187,7 @@ pub(crate) enum Error<'a> {
     BadMatrixScalarKind(Span, Scalar),
     BadAccessor(Span),
     BadTexture(Span),
+    UnsupportedMultisampledInputAttachment(Span),
     BadTypeCast {
         span: Span,
         from_type: String,
@@ -624,6 +625,14 @@ impl<'a> Error<'a> {
                     &source[bad_span]
                 ),
                 labels: vec![(bad_span, "not an image".into())],
+                notes: vec![],
+            },
+            Error::UnsupportedMultisampledInputAttachment(span) => ParseError {
+                message: "multisampled input attachments are not supported yet".to_string(),
+                labels: vec![(
+                    span,
+                    "this input attachment uses a multisampled texture".into(),
+                )],
                 notes: vec![],
             },
             Error::BadTypeCast {

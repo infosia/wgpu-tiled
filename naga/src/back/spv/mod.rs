@@ -394,13 +394,17 @@ impl LocalImageType {
             }
             crate::ImageClass::SubpassInputDepth { multi } => {
                 spirv_dim = spirv::Dim::DimSubpassData;
+                let mut flags = make_flags(multi, ImageTypeFlags::DEPTH | ImageTypeFlags::SAMPLED);
+                // Input attachments use the "unknown if sampled" OpTypeImage mode,
+                // even when they carry depth values.
+                flags.remove(ImageTypeFlags::SAMPLED);
                 LocalImageType {
                     sampled_type: crate::Scalar {
                         kind: crate::ScalarKind::Float,
                         width: 4,
                     },
                     dim: spirv_dim,
-                    flags: make_flags(multi, ImageTypeFlags::DEPTH | ImageTypeFlags::SAMPLED),
+                    flags,
                     image_format: spirv::ImageFormat::Unknown,
                 }
             }

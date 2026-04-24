@@ -14,7 +14,7 @@ OpDecorate %8 InputAttachmentIndex 1
 OpDecorate %11 Location 0
 %2 = OpTypeVoid
 %4 = OpTypeFloat 32
-%3 = OpTypeImage %4 SubpassData 1 0 0 1 Unknown
+%3 = OpTypeImage %4 SubpassData 1 0 0 2 Unknown
 %5 = OpTypeVector %4 4
 %7 = OpTypeInt 32 1
 %6 = OpTypeVector %7 2
