@@ -141,6 +141,12 @@ const EXAMPLES: &[ExampleDesc] = &[
         webgpu: false, // Multi-subpass extension only
     },
     ExampleDesc {
+        name: "subpass_msaa",
+        function: wgpu_examples::subpass_msaa::main,
+        webgl: false,  // MSAA subpass inputs (Metal/Vulkan only)
+        webgpu: false, // MSAA subpass inputs (Metal/Vulkan only)
+    },
+    ExampleDesc {
         name: "texture_arrays",
         function: wgpu_examples::texture_arrays::main,
         webgl: false,  // No texture arrays

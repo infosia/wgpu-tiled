@@ -33,6 +33,7 @@ pub mod skybox;
 pub mod srgb_blend;
 pub mod stencil_triangles;
 pub mod storage_texture;
+pub mod subpass_msaa;
 pub mod subpass_render_graph;
 pub mod texture_arrays;
 pub mod timestamp_queries;

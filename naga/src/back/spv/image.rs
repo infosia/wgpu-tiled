@@ -861,13 +861,8 @@ impl BlockContext<'_> {
             None
         };
 
-        let access_id = access.generate(
-            &mut self.writer.id_gen,
-            coordinates,
-            None,
-            sample_id,
-            block,
-        );
+        let access_id =
+            access.generate(&mut self.writer.id_gen, coordinates, None, sample_id, block);
 
         if result_type_id == access.result_type() {
             Ok(access_id)
