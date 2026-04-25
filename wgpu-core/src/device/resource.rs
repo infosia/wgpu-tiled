@@ -3621,6 +3621,41 @@ impl Device {
                     wgt::StorageTextureAccess::Atomic => wgt::TextureUses::STORAGE_ATOMIC,
                 })
             }
+            wgt::BindingType::SubpassInput {
+                sample_type,
+                multisampled,
+                aspect: _,
+            } => {
+                use wgt::TextureSampleType as Tst;
+                if multisampled != (view.samples != 1) {
+                    return Err(Error::InvalidTextureMultisample {
+                        binding,
+                        layout_multisampled: multisampled,
+                        view_samples: view.samples,
+                    });
+                }
+                let compat_sample_type = view
+                    .desc
+                    .format
+                    .sample_type(Some(view.desc.range.aspect), Some(self.features))
+                    .unwrap();
+                match (sample_type, compat_sample_type) {
+                    (Tst::Uint, Tst::Uint)
+                    | (Tst::Sint, Tst::Sint)
+                    | (Tst::Depth, Tst::Depth)
+                    | (Tst::Float { filterable: false }, Tst::Float { .. })
+                    | (Tst::Float { filterable: false }, Tst::Depth) => {}
+                    _ => {
+                        return Err(Error::InvalidTextureSampleType {
+                            binding,
+                            layout_sample_type: sample_type,
+                            view_format: view.desc.format,
+                            view_sample_type: compat_sample_type,
+                        })
+                    }
+                }
+                Ok(wgt::TextureUses::RESOURCE)
+            }
             wgt::BindingType::ExternalTexture => {
                 if view.desc.dimension != TextureViewDimension::D2 {
                     return Err(Error::InvalidTextureDimension {

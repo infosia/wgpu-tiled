@@ -1688,6 +1688,13 @@ impl crate::Device for super::Device {
             let count = entry.count.map_or(1, |c| c.get());
             match entry.ty {
                 wgt::BindingType::ExternalTexture => unimplemented!(),
+                wgt::BindingType::SubpassInput { .. } => {
+                    // Subpass inputs live in the HAL-managed shared
+                    // input-attachment descriptor set, not in the user's
+                    // descriptor set. Keeping them out of vk_bindings avoids
+                    // double-booking against `maxPerStageDescriptorInputAttachments`.
+                    continue;
+                }
                 _ => {
                     vk_bindings.push(vk::DescriptorSetLayoutBinding {
                         binding: next_binding,
@@ -1736,9 +1743,7 @@ impl crate::Device for super::Device {
                 wgt::BindingType::Texture { .. } => {
                     desc_count.sampled_image += count;
                 }
-                wgt::BindingType::SubpassInput { .. } => {
-                    desc_count.input_attachment += count;
-                }
+                wgt::BindingType::SubpassInput { .. } => {}
                 wgt::BindingType::StorageTexture { .. } => {
                     desc_count.storage_image += count;
                 }
@@ -2017,9 +2022,13 @@ impl crate::Device for super::Device {
                     );
                     next_binding += 1;
                 }
-                wgt::BindingType::Texture { .. }
-                | wgt::BindingType::SubpassInput { .. }
-                | wgt::BindingType::StorageTexture { .. } => {
+                wgt::BindingType::SubpassInput { .. } => {
+                    // Subpass inputs have no descriptor in the user's set.
+                    // The HAL-managed shared input-attachment descriptor set
+                    // carries the real views at render-pass time.
+                    continue;
+                }
+                wgt::BindingType::Texture { .. } | wgt::BindingType::StorageTexture { .. } => {
                     let start = entry.resource_index;
                     let end = start + entry.count;
                     let local_image_infos;
