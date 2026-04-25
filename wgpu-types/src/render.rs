@@ -1124,6 +1124,19 @@ pub struct SubpassDependency {
     pub by_region: bool,
 }
 
+/// Aspect kind of a subpass input binding.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
+pub enum SubpassInputAspect {
+    /// Read color aspect of a color attachment.
+    Color,
+    /// Read depth aspect of a depth/stencil attachment.
+    Depth,
+    /// Read stencil aspect of a depth/stencil attachment.
+    Stencil,
+}
+
 /// Validation and compatibility metadata for one subpass.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -1165,8 +1178,6 @@ pub struct SubpassTargetDesc {
     /// - `u32::MAX`, which denotes the render pass depth/stencil attachment.
     ///
     /// Entries are ordered by the consuming subpass's input-attachment binding order.
-    /// Backend note: Metal interprets WGSL `@input_attachment_index(N)` literally as
-    /// framebuffer color slot `N`.
     pub input_attachment_indices: alloc::vec::Vec<u32>,
 }
 

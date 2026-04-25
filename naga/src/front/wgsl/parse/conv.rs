@@ -407,6 +407,9 @@ pub enum TypeGenerator {
         arrayed: bool,
         multi: bool,
     },
+    SubpassInput {
+        multi: bool,
+    },
     StorageTexture {
         dim: ImageDimension,
         arrayed: bool,
@@ -500,6 +503,10 @@ pub fn map_predeclared_type(
         "texture_depth_cube" =>            Ti::Image { dim: ImageDimension::Cube, arrayed: false, class: ImageClass::Depth { multi: false } }.into(),
         "texture_depth_cube_array" =>      Ti::Image { dim: ImageDimension::Cube, arrayed: true,  class: ImageClass::Depth { multi: false } }.into(),
         "texture_depth_multisampled_2d" => Ti::Image { dim: ImageDimension::D2,   arrayed: false, class: ImageClass::Depth { multi: true  } }.into(),
+        "subpass_input_depth" => Ti::Image { dim: ImageDimension::D2, arrayed: false, class: ImageClass::SubpassInputDepth { multi: false } }.into(),
+        "subpass_input_depth_multisampled" => Ti::Image { dim: ImageDimension::D2, arrayed: false, class: ImageClass::SubpassInputDepth { multi: true } }.into(),
+        "subpass_input_stencil" => Ti::Image { dim: ImageDimension::D2, arrayed: false, class: ImageClass::SubpassInputStencil { multi: false } }.into(),
+        "subpass_input_stencil_multisampled" => Ti::Image { dim: ImageDimension::D2, arrayed: false, class: ImageClass::SubpassInputStencil { multi: true } }.into(),
         // external texture
         "texture_external" => Ti::Image { dim: ImageDimension::D2, arrayed: false, class: ImageClass::External }.into(),
         // ray desc
@@ -537,6 +544,8 @@ pub fn map_predeclared_type(
         "texture_cube" =>             TypeGenerator::SampledTexture { dim: ImageDimension::Cube, arrayed: false, multi: false }.into(),
         "texture_cube_array" =>       TypeGenerator::SampledTexture { dim: ImageDimension::Cube, arrayed: true,  multi: false }.into(),
         "texture_multisampled_2d" =>  TypeGenerator::SampledTexture { dim: ImageDimension::D2,   arrayed: false, multi: true  }.into(),
+        "subpass_input" => TypeGenerator::SubpassInput { multi: false }.into(),
+        "subpass_input_multisampled" => TypeGenerator::SubpassInput { multi: true }.into(),
         // storage textures
         "texture_storage_1d" =>       TypeGenerator::StorageTexture { dim: ImageDimension::D1,   arrayed: false }.into(),
         "texture_storage_2d" =>       TypeGenerator::StorageTexture { dim: ImageDimension::D2,   arrayed: false }.into(),

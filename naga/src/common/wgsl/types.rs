@@ -216,23 +216,49 @@ where
             // More about texture types: https://gpuweb.github.io/gpuweb/wgsl/#sampled-texture-type
             use crate::ImageClass as Ic;
 
-            let dim_str = dim.to_wgsl();
-            let arrayed_str = if arrayed { "_array" } else { "" };
             match class {
-                Ic::Sampled { kind, multi } | Ic::SubpassInput { kind, multi } => {
+                Ic::Sampled { kind, multi } => {
+                    let dim_str = dim.to_wgsl();
+                    let arrayed_str = if arrayed { "_array" } else { "" };
                     let multisampled_str = if multi { "multisampled_" } else { "" };
                     write!(out, "texture_{multisampled_str}{dim_str}{arrayed_str}<")?;
                     ctx.write_scalar(Scalar { kind, width: 4 }, out)?;
                     out.write_str(">")?;
                 }
-                Ic::Depth { multi } | Ic::SubpassInputDepth { multi } => {
+                Ic::SubpassInput { kind, multi: false } => {
+                    write!(out, "subpass_input<")?;
+                    ctx.write_scalar(Scalar { kind, width: 4 }, out)?;
+                    out.write_str(">")?;
+                }
+                Ic::SubpassInput { kind, multi: true } => {
+                    write!(out, "subpass_input_multisampled<")?;
+                    ctx.write_scalar(Scalar { kind, width: 4 }, out)?;
+                    out.write_str(">")?;
+                }
+                Ic::Depth { multi } => {
+                    let dim_str = dim.to_wgsl();
+                    let arrayed_str = if arrayed { "_array" } else { "" };
                     let multisampled_str = if multi { "multisampled_" } else { "" };
                     write!(
                         out,
                         "texture_depth_{multisampled_str}{dim_str}{arrayed_str}"
                     )?;
                 }
+                Ic::SubpassInputDepth { multi: false } => {
+                    write!(out, "subpass_input_depth")?;
+                }
+                Ic::SubpassInputDepth { multi: true } => {
+                    write!(out, "subpass_input_depth_multisampled")?;
+                }
+                Ic::SubpassInputStencil { multi: false } => {
+                    write!(out, "subpass_input_stencil")?;
+                }
+                Ic::SubpassInputStencil { multi: true } => {
+                    write!(out, "subpass_input_stencil_multisampled")?;
+                }
                 Ic::Storage { format, access } => {
+                    let dim_str = dim.to_wgsl();
+                    let arrayed_str = if arrayed { "_array" } else { "" };
                     let format_str = format.to_wgsl();
                     let access_str = if access.contains(crate::StorageAccess::ATOMIC) {
                         ",atomic"

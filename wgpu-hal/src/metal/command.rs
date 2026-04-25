@@ -389,7 +389,6 @@ impl super::CommandEncoder {
                         let br = naga::ResourceBinding {
                             group: group_index,
                             binding: *binding_location,
-                            input_attachment_index: None,
                         };
                         self.state.storage_buffer_length_map.insert(br, *size);
                         changes_sizes_buffer = true;

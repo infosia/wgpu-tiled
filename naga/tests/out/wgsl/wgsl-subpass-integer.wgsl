@@ -1,5 +1,5 @@
-@group(0) @binding(0) @input_attachment_index(3) 
-var gbuffer_uint: texture_2d<u32>;
+@group(0) @binding(0) 
+var gbuffer_uint: subpass_input<u32>;
 
 @fragment 
 fn main() -> @location(0) @interpolate(flat) vec4<u32> {

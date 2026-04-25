@@ -657,11 +657,11 @@ fn parse_storage_buffers() {
 }
 
 #[test]
-fn parse_input_attachment_index_binding() {
+fn parse_subpass_input_binding() {
     let module = parse_str(
         "
-        @group(0) @binding(1) @input_attachment_index(3)
-        var gbuffer: texture_2d<f32>;
+        @group(0) @binding(1)
+        var gbuffer: subpass_input<f32>;
         ",
     )
     .unwrap();
@@ -670,7 +670,6 @@ fn parse_input_attachment_index_binding() {
     let binding = global.binding.unwrap();
     assert_eq!(binding.group, 0);
     assert_eq!(binding.binding, 1);
-    assert_eq!(binding.input_attachment_index, Some(3));
     assert!(matches!(
         module.types[global.ty].inner,
         crate::TypeInner::Image {
@@ -682,7 +681,72 @@ fn parse_input_attachment_index_binding() {
 }
 
 #[test]
-fn parse_input_attachment_index_requires_texture_2d() {
+fn parse_subpass_input_multisampled_binding() {
+    let module = parse_str(
+        "
+        @group(0) @binding(0)
+        var gbuffer: subpass_input_multisampled<i32>;
+        ",
+    )
+    .unwrap();
+
+    let (_, global) = module.global_variables.iter().next().unwrap();
+    assert!(matches!(
+        module.types[global.ty].inner,
+        crate::TypeInner::Image {
+            dim: crate::ImageDimension::D2,
+            arrayed: false,
+            class: crate::ImageClass::SubpassInput {
+                multi: true,
+                kind: crate::ScalarKind::Sint,
+            },
+        }
+    ));
+}
+
+#[test]
+fn parse_subpass_input_depth_and_stencil_binding() {
+    let module = parse_str(
+        "
+        @group(0) @binding(0)
+        var depth_in: subpass_input_depth;
+        @group(0) @binding(1)
+        var stencil_in: subpass_input_stencil;
+        ",
+    )
+    .unwrap();
+
+    let depth = module
+        .global_variables
+        .iter()
+        .find(|&(_, global)| global.name.as_deref() == Some("depth_in"))
+        .unwrap()
+        .1;
+    assert!(matches!(
+        module.types[depth.ty].inner,
+        crate::TypeInner::Image {
+            class: crate::ImageClass::SubpassInputDepth { multi: false },
+            ..
+        }
+    ));
+
+    let stencil = module
+        .global_variables
+        .iter()
+        .find(|&(_, global)| global.name.as_deref() == Some("stencil_in"))
+        .unwrap()
+        .1;
+    assert!(matches!(
+        module.types[stencil.ty].inner,
+        crate::TypeInner::Image {
+            class: crate::ImageClass::SubpassInputStencil { multi: false },
+            ..
+        }
+    ));
+}
+
+#[test]
+fn parse_input_attachment_index_is_deprecated() {
     use crate::front::wgsl::{error::Error, Frontend};
 
     let shader = "
@@ -690,36 +754,9 @@ fn parse_input_attachment_index_requires_texture_2d() {
         var<uniform> value: u32;
     ";
     let result = Frontend::new().inner(shader);
-    assert!(matches!(*result.unwrap_err(), Error::BadTexture(_)));
-}
-
-#[test]
-fn parse_input_attachment_index_rejects_multisampled_texture_2d() {
-    use crate::front::wgsl::{error::Error, Frontend};
-
-    let shader = "
-        @group(0) @binding(0) @input_attachment_index(0)
-        var gbuffer: texture_multisampled_2d<f32>;
-    ";
-    let result = Frontend::new().inner(shader);
     assert!(matches!(
         *result.unwrap_err(),
-        Error::UnsupportedMultisampledInputAttachment(_)
-    ));
-}
-
-#[test]
-fn parse_input_attachment_index_rejects_multisampled_depth_texture_2d() {
-    use crate::front::wgsl::{error::Error, Frontend};
-
-    let shader = "
-        @group(0) @binding(0) @input_attachment_index(0)
-        var gbuffer: texture_depth_multisampled_2d;
-    ";
-    let result = Frontend::new().inner(shader);
-    assert!(matches!(
-        *result.unwrap_err(),
-        Error::UnsupportedMultisampledInputAttachment(_)
+        Error::DeprecatedInputAttachmentIndex(_)
     ));
 }
 
@@ -727,8 +764,8 @@ fn parse_input_attachment_index_rejects_multisampled_depth_texture_2d() {
 fn parse_input_attachment_subpass_load() {
     let module = parse_str(
         "
-        @group(0) @binding(0) @input_attachment_index(0)
-        var gbuffer: texture_2d<f32>;
+        @group(0) @binding(0)
+        var gbuffer: subpass_input<f32>;
 
         @fragment
         fn main() -> @location(0) vec4<f32> {
@@ -749,8 +786,8 @@ fn parse_input_attachment_texture_load_rejected() {
     use crate::front::wgsl::{error::Error, Frontend};
 
     let shader = "
-        @group(0) @binding(0) @input_attachment_index(0)
-        var gbuffer: texture_2d<f32>;
+        @group(0) @binding(0)
+        var gbuffer: subpass_input<f32>;
 
         @fragment
         fn main() -> @location(0) vec4<f32> {
@@ -872,7 +909,6 @@ fn parse_repeated_attributes() {
         ("group(0)", template_resource),
         ("interpolate(flat)", template_vs),
         ("invariant", template_vs),
-        ("input_attachment_index(0)", template_resource),
         ("location(0)", template_vs),
         ("size(16)", template_struct),
         ("vertex", template_stage),

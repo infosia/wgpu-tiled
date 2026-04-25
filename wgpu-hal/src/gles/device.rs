@@ -19,6 +19,7 @@ type NameBindingMap = FastHashMap<String, (super::BindingRegister, u8)>;
 
 struct CompilationContext<'a> {
     layout: &'a super::PipelineLayout,
+    subpass_color_slots: &'a FastHashMap<(u32, u32), u32>,
     sampler_map: &'a mut super::SamplerBindMap,
     name_binding_map: &'a mut NameBindingMap,
     immediates_items: &'a mut Vec<naga::back::glsl::ImmediateItem>,
@@ -269,13 +270,15 @@ impl super::Device {
 
         let mut output = String::new();
         let needs_temp_options = stage.zero_initialize_workgroup_memory
-            != context.layout.naga_options.zero_initialize_workgroup_memory;
+            != context.layout.naga_options.zero_initialize_workgroup_memory
+            || !context.subpass_color_slots.is_empty();
         let mut temp_options;
         let naga_options = if needs_temp_options {
             // We use a conditional here, as cloning the naga_options could be expensive
             // That is, we want to avoid doing that unless we cannot avoid it
             temp_options = context.layout.naga_options.clone();
             temp_options.zero_initialize_workgroup_memory = stage.zero_initialize_workgroup_memory;
+            temp_options.subpass_color_slots = context.subpass_color_slots.clone();
             &temp_options
         } else {
             &context.layout.naga_options
@@ -317,6 +320,7 @@ impl super::Device {
         gl: &glow::Context,
         shaders: ArrayVec<ShaderStage<'a>, { crate::MAX_CONCURRENT_SHADER_STAGES }>,
         layout: &super::PipelineLayout,
+        subpass_color_slots: &FastHashMap<(u32, u32), u32>,
         #[cfg_attr(target_arch = "wasm32", allow(unused))] label: Option<&str>,
         multiview_mask: Option<NonZeroU32>,
     ) -> Result<Arc<super::PipelineInner>, crate::PipelineError> {
@@ -340,18 +344,25 @@ impl super::Device {
             .program_cache
             .try_lock()
             .expect("Couldn't acquire program_cache lock");
+        let mut subpass_color_slots_key = subpass_color_slots
+            .iter()
+            .map(|(&(group, binding), &location)| ((group, binding), location))
+            .collect::<Vec<_>>();
+        subpass_color_slots_key.sort_unstable_by_key(|((group, binding), _)| (*group, *binding));
         // This guard ensures that we can't accidentally destroy a program whilst we're about to reuse it
         // The only place that destroys a pipeline is also locking on `program_cache`
         let program = guard
             .entry(super::ProgramCacheKey {
                 stages: program_stages,
                 group_to_binding_to_slot: group_to_binding_to_slot.into_boxed_slice(),
+                subpass_color_slots: subpass_color_slots_key.into_boxed_slice(),
             })
             .or_insert_with(|| unsafe {
                 Self::create_program(
                     gl,
                     shaders,
                     layout,
+                    subpass_color_slots,
                     label,
                     multiview_mask,
                     self.shared.shading_language_version,
@@ -375,10 +386,68 @@ impl super::Device {
         buf
     }
 
+    fn build_subpass_color_slot_map(
+        stage: &crate::ProgrammableStage<super::ShaderModule>,
+        target: Option<&wgt::SubpassTarget>,
+    ) -> Result<FastHashMap<(u32, u32), u32>, crate::PipelineError> {
+        let mut slots = FastHashMap::default();
+        let Some(target) = target else {
+            return Ok(slots);
+        };
+        let subpass_desc = target
+            .subpass_descs
+            .get(target.index as usize)
+            .ok_or_else(|| {
+                crate::PipelineError::Linkage(
+                    wgt::ShaderStages::FRAGMENT,
+                    format!(
+                        "subpass target index {} is out of bounds for {} declared subpasses",
+                        target.index,
+                        target.subpass_descs.len()
+                    ),
+                )
+            })?;
+
+        for (_, global) in stage.module.source.module.global_variables.iter() {
+            let Some(binding) = global.binding else {
+                continue;
+            };
+            let class = match stage.module.source.module.types[global.ty].inner {
+                naga::TypeInner::Image { class, .. } => class,
+                _ => continue,
+            };
+            if !class.is_subpass_input() {
+                continue;
+            }
+
+            let Some(&attachment_slot) = subpass_desc
+                .input_attachment_indices
+                .get(binding.binding as usize)
+            else {
+                return Err(crate::PipelineError::Linkage(
+                    wgt::ShaderStages::FRAGMENT,
+                    format!(
+                        "subpass input binding {} is out of range for {} declared input attachments",
+                        binding.binding,
+                        subpass_desc.input_attachment_indices.len()
+                    ),
+                ));
+            };
+
+            if attachment_slot != u32::MAX {
+                slots.insert((binding.group, binding.binding), attachment_slot);
+            }
+        }
+
+        Ok(slots)
+    }
+
+    #[allow(clippy::too_many_arguments)]
     unsafe fn create_program<'a>(
         gl: &glow::Context,
         shaders: ArrayVec<ShaderStage<'a>, { crate::MAX_CONCURRENT_SHADER_STAGES }>,
         layout: &super::PipelineLayout,
+        subpass_color_slots: &FastHashMap<(u32, u32), u32>,
         #[cfg_attr(target_arch = "wasm32", allow(unused))] label: Option<&str>,
         multiview_mask: Option<NonZeroU32>,
         glsl_version: naga::back::glsl::Version,
@@ -412,6 +481,7 @@ impl super::Device {
             };
             let context = CompilationContext {
                 layout,
+                subpass_color_slots,
                 sampler_map: &mut sampler_map,
                 name_binding_map: &mut name_binding_map,
                 immediates_items: pc_item,
@@ -1321,6 +1391,7 @@ impl crate::Device for super::Device {
                 let counter = match entry.ty {
                     wgt::BindingType::Sampler { .. } => &mut num_samplers,
                     wgt::BindingType::Texture { .. } => &mut num_textures,
+                    wgt::BindingType::SubpassInput { .. } => &mut num_textures,
                     wgt::BindingType::StorageTexture { .. } => &mut num_images,
                     wgt::BindingType::Buffer {
                         ty: wgt::BufferBindingType::Uniform,
@@ -1338,7 +1409,6 @@ impl crate::Device for super::Device {
                 let br = naga::ResourceBinding {
                     group: group_index as u32,
                     binding: entry.binding,
-                    input_attachment_index: None,
                 };
                 binding_map.insert(br, *counter);
                 *counter += entry.count.map_or(1, |c| c.get() as u8);
@@ -1363,6 +1433,7 @@ impl crate::Device for super::Device {
                     .shared
                     .private_caps
                     .contains(PrivateCapabilities::SHADER_FRAMEBUFFER_FETCH),
+                subpass_color_slots: FastHashMap::default(),
             },
         })
     }
@@ -1418,6 +1489,26 @@ impl crate::Device for super::Device {
                     let (raw, target) = view.inner.as_native();
 
                     super::Texture::log_failing_target_heuristics(view_dimension, target);
+
+                    super::RawBinding::Texture {
+                        raw,
+                        target,
+                        aspects: view.aspects,
+                        mip_levels: view.mip_levels.clone(),
+                    }
+                }
+                wgt::BindingType::SubpassInput { .. } => {
+                    let view = desc.textures[entry.resource_index as usize].view;
+                    if view.array_layers.start != 0 {
+                        log::error!("Unable to create a sampled texture binding for non-zero array layer.\n{}",
+                            "This is an implementation problem of wgpu-hal/gles backend.")
+                    }
+                    let (raw, target) = view.inner.as_native();
+
+                    super::Texture::log_failing_target_heuristics(
+                        wgt::TextureViewDimension::D2,
+                        target,
+                    );
 
                     super::RawBinding::Texture {
                         raw,
@@ -1513,8 +1604,20 @@ impl crate::Device for super::Device {
         if let Some(ref fs) = desc.fragment_stage {
             shaders.push((naga::ShaderStage::Fragment, fs));
         }
+        let subpass_color_slots = if let Some(ref fs) = desc.fragment_stage {
+            Self::build_subpass_color_slot_map(fs, desc.subpass_target)?
+        } else {
+            FastHashMap::default()
+        };
         let inner = unsafe {
-            self.create_pipeline(gl, shaders, desc.layout, desc.label, desc.multiview_mask)
+            self.create_pipeline(
+                gl,
+                shaders,
+                desc.layout,
+                &subpass_color_slots,
+                desc.label,
+                desc.multiview_mask,
+            )
         }?;
 
         let (vertex_buffers, vertex_attributes) = {
@@ -1605,7 +1708,16 @@ impl crate::Device for super::Device {
         let gl = &self.shared.context.lock();
         let mut shaders = ArrayVec::new();
         shaders.push((naga::ShaderStage::Compute, &desc.stage));
-        let inner = unsafe { self.create_pipeline(gl, shaders, desc.layout, desc.label, None) }?;
+        let inner = unsafe {
+            self.create_pipeline(
+                gl,
+                shaders,
+                desc.layout,
+                &FastHashMap::default(),
+                desc.label,
+                None,
+            )
+        }?;
 
         self.counters.compute_pipelines.add(1);
 

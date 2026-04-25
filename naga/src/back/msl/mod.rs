@@ -281,7 +281,7 @@ enum LocationMode {
     Uniform,
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serialize", derive(serde::Serialize))]
 #[cfg_attr(feature = "deserialize", derive(serde::Deserialize))]
 #[cfg_attr(feature = "deserialize", serde(default))]
@@ -298,6 +298,8 @@ pub struct Options {
     pub fake_missing_bindings: bool,
     /// Bounds checking policies.
     pub bounds_check_policies: index::BoundsCheckPolicies,
+    /// Mapping from `(group, binding)` to render-pass color slot for subpass inputs.
+    pub subpass_color_slots: crate::FastHashMap<(u32, u32), u32>,
     /// Should workgroup variables be zero initialized (by polyfilling)?
     pub zero_initialize_workgroup_memory: bool,
     /// If set, loops will have code injected into them, forcing the compiler
@@ -314,6 +316,7 @@ impl Default for Options {
             spirv_cross_compatibility: false,
             fake_missing_bindings: true,
             bounds_check_policies: index::BoundsCheckPolicies::default(),
+            subpass_color_slots: crate::FastHashMap::default(),
             zero_initialize_workgroup_memory: true,
             force_loop_bounding: true,
         }
@@ -599,18 +602,8 @@ impl Options {
         ep: &crate::EntryPoint,
         res_binding: &crate::ResourceBinding,
     ) -> Option<&BindTarget> {
-        self.get_entry_point_resources(ep).and_then(|res| {
-            res.resources.get(res_binding).or_else(|| {
-                res_binding.input_attachment_index.and_then(|_| {
-                    let plain_binding = crate::ResourceBinding {
-                        group: res_binding.group,
-                        binding: res_binding.binding,
-                        input_attachment_index: None,
-                    };
-                    res.resources.get(&plain_binding)
-                })
-            })
-        })
+        self.get_entry_point_resources(ep)
+            .and_then(|res| res.resources.get(res_binding))
     }
 
     fn resolve_resource_binding(
@@ -618,9 +611,12 @@ impl Options {
         ep: &crate::EntryPoint,
         res_binding: &crate::ResourceBinding,
     ) -> Result<ResolvedBinding, EntryPointError> {
-        if let Some(input_attachment_index) = res_binding.input_attachment_index {
+        if let Some(&location) = self
+            .subpass_color_slots
+            .get(&(res_binding.group, res_binding.binding))
+        {
             return Ok(ResolvedBinding::Color {
-                location: input_attachment_index,
+                location,
                 blend_src: None,
             });
         }

@@ -858,16 +858,9 @@ impl super::Validator {
                 };
 
                 match class {
-                    crate::ImageClass::SubpassInput { multi: false, .. }
-                    | crate::ImageClass::SubpassInputDepth { multi: false } => {}
-                    // TODO: support multisampled subpass loads in a follow-up.
                     crate::ImageClass::SubpassInput { .. }
-                    | crate::ImageClass::SubpassInputDepth { .. } => {
-                        return Err(ExpressionError::InvalidSubpassOp {
-                            op: "SubpassLoad",
-                            class,
-                        });
-                    }
+                    | crate::ImageClass::SubpassInputDepth { .. }
+                    | crate::ImageClass::SubpassInputStencil { .. } => {}
                     _ => {
                         return Err(ExpressionError::InvalidImageClass(class));
                     }

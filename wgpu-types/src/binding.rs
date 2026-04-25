@@ -111,6 +111,15 @@ pub enum BindingType {
         /// `texture_depth_multisampled_2d` in the shader, and read using `textureLoad`.
         multisampled: bool,
     },
+    /// A subpass input binding.
+    SubpassInput {
+        /// Sample type of the subpass input.
+        sample_type: crate::TextureSampleType,
+        /// True if the subpass input is multisampled.
+        multisampled: bool,
+        /// Aspect of the source attachment.
+        aspect: crate::SubpassInputAspect,
+    },
     /// A storage texture.
     ///
     /// Example WGSL syntax:

@@ -359,14 +359,24 @@ impl<'a, W: Write> Writer<'a, W> {
                     } else {
                         None
                     };
-                    let input_attachment_index = global
-                        .binding
-                        .as_ref()
-                        .and_then(|binding| binding.input_attachment_index);
+                    let subpass_color_slot = global.binding.as_ref().and_then(|binding| {
+                        self.options
+                            .subpass_color_slots
+                            .get(&(binding.group, binding.binding))
+                            .copied()
+                    });
+                    let input_attachment_index = if class.is_subpass_input() {
+                        global.binding.as_ref().map(|binding| binding.binding)
+                    } else {
+                        None
+                    };
                     let use_framebuffer_fetch =
-                        self.is_framebuffer_fetch_subpass_image(class, input_attachment_index);
+                        self.is_framebuffer_fetch_subpass_image(class, subpass_color_slot);
 
                     if use_framebuffer_fetch {
+                        if let Some(location) = subpass_color_slot {
+                            write!(self.out, "layout(location = {location}) ")?;
+                        }
                         write!(self.out, "inout ")?;
                         self.write_framebuffer_fetch_type(class)?;
                         let global_name = self.get_global_name(handle, global);
@@ -597,27 +607,18 @@ impl<'a, W: Write> Writer<'a, W> {
     }
 
     fn lookup_resource_binding(&self, binding: &crate::ResourceBinding) -> Option<&u8> {
-        self.options.binding_map.get(binding).or_else(|| {
-            binding.input_attachment_index.and_then(|_| {
-                let plain_binding = crate::ResourceBinding {
-                    group: binding.group,
-                    binding: binding.binding,
-                    input_attachment_index: None,
-                };
-                self.options.binding_map.get(&plain_binding)
-            })
-        })
+        self.options.binding_map.get(binding)
     }
 
     fn is_framebuffer_fetch_subpass_image(
         &self,
         class: crate::ImageClass,
-        input_attachment_index: Option<u32>,
+        color_slot: Option<u32>,
     ) -> bool {
         self.options.use_framebuffer_fetch
             && self.entry_point.stage == ShaderStage::Fragment
             && class.is_subpass_input()
-            && input_attachment_index.is_some()
+            && color_slot.is_some()
             && matches!(class, crate::ImageClass::SubpassInput { multi: false, .. })
     }
 
@@ -664,6 +665,14 @@ impl<'a, W: Write> Writer<'a, W> {
                     }
                     Ok(())
                 }
+                crate::ImageClass::SubpassInputStencil { multi } => {
+                    if multi {
+                        write!(self.out, "usubpassInputMS")?;
+                    } else {
+                        write!(self.out, "usubpassInput")?;
+                    }
+                    Ok(())
+                }
                 crate::ImageClass::Storage { .. } | crate::ImageClass::External => Err(
                     Error::Custom("subpass input images must be sampled or depth".to_string()),
                 ),
@@ -698,7 +707,9 @@ impl<'a, W: Write> Writer<'a, W> {
             Ic::Depth { multi: false } => ("sampler", float, "", "Shadow"),
             Ic::Storage { format, .. } => ("image", format.into(), "", ""),
             Ic::External => unimplemented!(),
-            Ic::SubpassInput { .. } | Ic::SubpassInputDepth { .. } => unreachable!(),
+            Ic::SubpassInput { .. }
+            | Ic::SubpassInputDepth { .. }
+            | Ic::SubpassInputStencil { .. } => unreachable!(),
         };
 
         let precision = if self.options.version.is_es() {
@@ -2861,7 +2872,8 @@ impl<'a, W: Write> Writer<'a, W> {
                             }
                             ImageClass::External => unimplemented!(),
                             ImageClass::SubpassInput { .. }
-                            | ImageClass::SubpassInputDepth { .. } => unreachable!(),
+                            | ImageClass::SubpassInputDepth { .. }
+                            | ImageClass::SubpassInputStencil { .. } => unreachable!(),
                         }
                         write!(self.out, ")")?;
                         if components != 1 || self.options.version.is_es() {
@@ -2879,7 +2891,8 @@ impl<'a, W: Write> Writer<'a, W> {
                             ImageClass::Storage { .. } => "imageSize",
                             ImageClass::External => unimplemented!(),
                             ImageClass::SubpassInput { .. }
-                            | ImageClass::SubpassInputDepth { .. } => unreachable!(),
+                            | ImageClass::SubpassInputDepth { .. }
+                            | ImageClass::SubpassInputStencil { .. } => unreachable!(),
                         };
                         write!(self.out, "{fun_name}(")?;
                         self.write_expr(image, ctx)?;
@@ -2901,7 +2914,8 @@ impl<'a, W: Write> Writer<'a, W> {
                             ImageClass::Storage { .. } => "imageSamples",
                             ImageClass::External => unimplemented!(),
                             ImageClass::SubpassInput { .. }
-                            | ImageClass::SubpassInputDepth { .. } => unreachable!(),
+                            | ImageClass::SubpassInputDepth { .. }
+                            | ImageClass::SubpassInputStencil { .. } => unreachable!(),
                         };
                         write!(self.out, "{fun_name}(")?;
                         self.write_expr(image, ctx)?;
@@ -4187,7 +4201,8 @@ impl<'a, W: Write> Writer<'a, W> {
                 ))
             }
             crate::ImageClass::SubpassInput { .. }
-            | crate::ImageClass::SubpassInputDepth { .. } => {
+            | crate::ImageClass::SubpassInputDepth { .. }
+            | crate::ImageClass::SubpassInputStencil { .. } => {
                 return Err(Error::Custom(
                     "subpass input image used with ImageLoad".to_string(),
                 ))
@@ -4435,8 +4450,14 @@ impl<'a, W: Write> Writer<'a, W> {
                 self.write_expr(image, ctx)?;
                 write!(self.out, ").x")?;
             }
+            crate::ImageClass::SubpassInputStencil { multi: false } => {
+                write!(self.out, "subpassLoad(")?;
+                self.write_expr(image, ctx)?;
+                write!(self.out, ").x")?;
+            }
             crate::ImageClass::SubpassInput { .. }
-            | crate::ImageClass::SubpassInputDepth { .. } => {
+            | crate::ImageClass::SubpassInputDepth { .. }
+            | crate::ImageClass::SubpassInputStencil { .. } => {
                 return Err(Error::Custom(
                     "multisampled subpass inputs are unsupported".to_string(),
                 ));

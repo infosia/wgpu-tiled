@@ -9,7 +9,7 @@ struct main_Output {
     metal::uint4 member [[color(0)]];
 };
 fragment main_Output main_(
-  metal::uint4 gbuffer_uint [[color(3)]]
+  metal::uint4 gbuffer_uint [[user(fake0)]]
 ) {
     metal::uint4 _e1 = gbuffer_uint;
     return main_Output { _e1 };

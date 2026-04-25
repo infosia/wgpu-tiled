@@ -519,6 +519,9 @@ impl<'a> ResolveContext<'a> {
                     | crate::ImageClass::SubpassInputDepth { multi: _ } => {
                         Ti::Scalar(crate::Scalar::F32)
                     }
+                    crate::ImageClass::SubpassInputStencil { multi: _ } => {
+                        Ti::Scalar(crate::Scalar::U32)
+                    }
                     crate::ImageClass::Sampled { kind, multi: _ }
                     | crate::ImageClass::SubpassInput { kind, multi: _ } => Ti::Vector {
                         scalar: crate::Scalar { kind, width: 4 },

@@ -840,7 +840,6 @@ impl super::Device {
         stage: &crate::ProgrammableStage<super::ShaderModule>,
         naga_stage: naga::ShaderStage,
         binding_map: &naga::back::spv::BindingMap,
-        input_attachment_index_remap: Option<&[(u32, u32)]>,
     ) -> Result<CompiledStage, crate::PipelineError> {
         let stage_flags = crate::auxil::map_naga_stage(naga_stage);
         let vk_module = match *stage.module {
@@ -905,7 +904,7 @@ impl super::Device {
                     &self.naga_options
                 };
 
-                let (mut module, info) = naga::back::pipeline_constants::process_overrides(
+                let (module, info) = naga::back::pipeline_constants::process_overrides(
                     &naga_shader.module,
                     &naga_shader.info,
                     Some((naga_stage, stage.entry_point)),
@@ -914,24 +913,6 @@ impl super::Device {
                 .map_err(|e| {
                     crate::PipelineError::PipelineConstants(stage_flags, format!("{e}"))
                 })?;
-                if let Some(remap) = input_attachment_index_remap {
-                    let module = module.to_mut();
-                    for (_, global) in module.global_variables.iter_mut() {
-                        let Some(binding) = global.binding.as_mut() else {
-                            continue;
-                        };
-                        let Some(input_attachment_index) = binding.input_attachment_index else {
-                            continue;
-                        };
-                        if let Some((_, local_index)) = remap
-                            .iter()
-                            .find(|(shader_index, _)| *shader_index == input_attachment_index)
-                        {
-                            binding.input_attachment_index = Some(*local_index);
-                        }
-                    }
-                }
-
                 let spv = {
                     profiling::scope!("naga::spv::write_vec");
                     naga::back::spv::write_vec(&module, &info, options, Some(&pipeline_options))
@@ -1755,6 +1736,9 @@ impl crate::Device for super::Device {
                 wgt::BindingType::Texture { .. } => {
                     desc_count.sampled_image += count;
                 }
+                wgt::BindingType::SubpassInput { .. } => {
+                    desc_count.input_attachment += count;
+                }
                 wgt::BindingType::StorageTexture { .. } => {
                     desc_count.storage_image += count;
                 }
@@ -1879,7 +1863,6 @@ impl crate::Device for super::Device {
                     naga::ResourceBinding {
                         group: group as u32,
                         binding,
-                        input_attachment_index: None,
                     },
                     naga::back::spv::BindingInfo {
                         descriptor_set: group as u32,
@@ -2034,7 +2017,9 @@ impl crate::Device for super::Device {
                     );
                     next_binding += 1;
                 }
-                wgt::BindingType::Texture { .. } | wgt::BindingType::StorageTexture { .. } => {
+                wgt::BindingType::Texture { .. }
+                | wgt::BindingType::SubpassInput { .. }
+                | wgt::BindingType::StorageTexture { .. } => {
                     let start = entry.resource_index;
                     let end = start + entry.count;
                     let local_image_infos;
@@ -2227,7 +2212,6 @@ impl crate::Device for super::Device {
         let mut compatible_subpass_index = 0;
         let mut pipeline_input_attachments: Vec<super::PipelineInputAttachmentBinding> = Vec::new();
         let mut fragment_binding_map = desc.layout.binding_map.clone();
-        let mut fragment_input_attachment_index_remap: Vec<(u32, u32)> = Vec::new();
         if let Some(subpass_target) = subpass_target {
             compatible_subpass_index = subpass_target.index;
             compatible_rp_key.subpass_dependencies = subpass_target.dependencies.clone();
@@ -2249,57 +2233,58 @@ impl crate::Device for super::Device {
                             let Some(binding) = global.binding.as_ref() else {
                                 continue;
                             };
-                            let Some(input_attachment_index) = binding.input_attachment_index
-                            else {
-                                continue;
+                            let class = match naga_shader.module.types[global.ty].inner {
+                                naga::TypeInner::Image { class, .. }
+                                    if class.is_subpass_input() =>
+                                {
+                                    class
+                                }
+                                _ => {
+                                    continue;
+                                }
                             };
-                            if binding.binding >= self.shared.max_input_attachments {
+                            let input_attachment_binding = binding.binding;
+                            if input_attachment_binding >= self.shared.max_input_attachments {
                                 return Err(crate::PipelineError::Linkage(
                                     wgt::ShaderStages::FRAGMENT,
                                     format!(
                                         "input attachment binding {} exceeds backend limit {}",
-                                        binding.binding, self.shared.max_input_attachments
+                                        input_attachment_binding, self.shared.max_input_attachments
                                     ),
                                 ));
                             }
-                            let local_input_attachment_index = if current_subpass_desc
+                            let Some(&attachment_index) = current_subpass_desc
                                 .input_attachment_indices
-                                .get(input_attachment_index as usize)
-                                .is_some()
-                            {
-                                input_attachment_index
-                            } else if let Some((local_index, _)) = current_subpass_desc
-                                .input_attachment_indices
-                                .iter()
-                                .enumerate()
-                                .find(|(_, slot)| **slot == input_attachment_index)
-                            {
-                                local_index as u32
-                            } else {
+                                .get(input_attachment_binding as usize)
+                            else {
                                 return Err(crate::PipelineError::Linkage(
                                     wgt::ShaderStages::FRAGMENT,
                                     format!(
-                                        "input attachment index {} is out of range for subpass {}",
-                                        input_attachment_index, subpass_target.index
+                                        "input attachment binding {} is out of range for subpass {}",
+                                        input_attachment_binding, subpass_target.index
                                     ),
                                 ));
                             };
-                            if local_input_attachment_index != input_attachment_index
-                                && !fragment_input_attachment_index_remap.iter().any(
-                                    |(shader_index, _)| *shader_index == input_attachment_index,
+                            if attachment_index == vk::ATTACHMENT_UNUSED
+                                && !matches!(
+                                    class,
+                                    naga::ImageClass::SubpassInputDepth { .. }
+                                        | naga::ImageClass::SubpassInputStencil { .. }
                                 )
                             {
-                                fragment_input_attachment_index_remap
-                                    .push((input_attachment_index, local_input_attachment_index));
+                                return Err(crate::PipelineError::Linkage(
+                                    wgt::ShaderStages::FRAGMENT,
+                                    format!(
+                                        "input attachment binding {} is unbound in subpass {}",
+                                        input_attachment_binding, subpass_target.index
+                                    ),
+                                ));
                             }
-                            let mut mapped_binding = *binding;
-                            mapped_binding.input_attachment_index =
-                                Some(local_input_attachment_index);
                             fragment_binding_map.insert(
-                                mapped_binding,
+                                *binding,
                                 naga::back::spv::BindingInfo {
                                     binding_array_size: None,
-                                    binding: binding.binding,
+                                    binding: input_attachment_binding,
                                     descriptor_set: desc
                                         .layout
                                         .input_attachment_descriptor_set_index,
@@ -2307,11 +2292,11 @@ impl crate::Device for super::Device {
                             );
                             if !pipeline_input_attachments
                                 .iter()
-                                .any(|mapped| mapped.binding == binding.binding)
+                                .any(|mapped| mapped.binding == input_attachment_binding)
                             {
                                 pipeline_input_attachments.push(
                                     super::PipelineInputAttachmentBinding {
-                                        binding: binding.binding,
+                                        binding: input_attachment_binding,
                                     },
                                 );
                             }
@@ -2388,7 +2373,6 @@ impl crate::Device for super::Device {
                     vertex_stage,
                     naga::ShaderStage::Vertex,
                     &desc.layout.binding_map,
-                    None,
                 )?);
                 stages.push(compiled_vs.as_ref().unwrap().create_info);
             }
@@ -2401,7 +2385,6 @@ impl crate::Device for super::Device {
                         t,
                         naga::ShaderStage::Task,
                         &desc.layout.binding_map,
-                        None,
                     )?);
                     stages.push(compiled_ts.as_ref().unwrap().create_info);
                 }
@@ -2409,19 +2392,14 @@ impl crate::Device for super::Device {
                     mesh_stage,
                     naga::ShaderStage::Mesh,
                     &desc.layout.binding_map,
-                    None,
                 )?);
                 stages.push(compiled_ms.as_ref().unwrap().create_info);
             }
         }
         let compiled_fs = match desc.fragment_stage {
             Some(ref stage) => {
-                let compiled = self.compile_stage(
-                    stage,
-                    naga::ShaderStage::Fragment,
-                    &fragment_binding_map,
-                    Some(&fragment_input_attachment_index_remap),
-                )?;
+                let compiled =
+                    self.compile_stage(stage, naga::ShaderStage::Fragment, &fragment_binding_map)?;
                 stages.push(compiled.create_info);
                 Some(compiled)
             }
@@ -2744,7 +2722,6 @@ impl crate::Device for super::Device {
             &desc.stage,
             naga::ShaderStage::Compute,
             &desc.layout.binding_map,
-            None,
         )?;
 
         let vk_infos = [{

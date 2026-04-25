@@ -19,7 +19,7 @@ Standard wgpu follows the WebGPU spec, which only supports flat single-pass rend
 | **Input Attachments** | Read previous subpass output at the current fragment position | Direct tile memory read, no texture sampling overhead |
 | **Dynamic Subpass Culling** | Per-frame subpass activation/deactivation without pipeline recompilation | Skip debug/optional passes with zero GPU cost |
 | **RenderGraphBuilder** | Declarative API that auto-infers load/store ops and generates subpass dependencies | Correct TBDR optimization with minimal boilerplate |
-| **SubpassData in naga** | `ImageDimension::SubpassData` IR + `InputAttachmentIndex` SPIR-V decoration + GLSL `use_framebuffer_fetch` option | Shader compiler support for tile memory reads |
+| **Typed subpass inputs in naga** | `subpass_input*` WGSL types + `ImageClass::SubpassInput{,Depth,Stencil}` IR + binding-driven `InputAttachmentIndex` SPIR-V decoration + GLSL `use_framebuffer_fetch` option | Shader compiler support for tile memory reads |
 
 ### Supported Backends
 
@@ -44,27 +44,27 @@ wgpu-hal (HAL traits)      -- Device::create_transient_attachment(), CommandEnco
   +-- GLES backend          -- Renderbuffer fallback, EXT_shader_framebuffer_fetch detection
   +-- DX12 backend          -- Stub implementations
   |
-naga (shader compiler)     -- SubpassData IR, InputAttachmentIndex, use_framebuffer_fetch
+naga (shader compiler)     -- Typed subpass input IR, binding-driven InputAttachmentIndex, use_framebuffer_fetch
 ```
 
-### WGSL Shader Extension: `@input_attachment_index`
+### WGSL Shader Extension: typed `subpass_input*`
 
-wgpu-tiled extends WGSL with `@input_attachment_index(N)` for reading previous subpass output directly from tile memory:
+wgpu-tiled extends WGSL with typed subpass input bindings for reading previous subpass output directly from tile memory:
 
 ```wgsl
 // Lighting pass shader -- reads G-Buffer via input attachments
-@group(0) @binding(0) @input_attachment_index(0) var t_albedo: texture_2d<f32>;
-@group(0) @binding(1) @input_attachment_index(1) var t_normal: texture_2d<f32>;
+@group(0) @binding(0) var t_albedo: subpass_input<f32>;
+@group(0) @binding(1) var t_normal: subpass_input<f32>;
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let albedo = textureLoad(t_albedo, vec2<i32>(0, 0), 0).rgb;
-    let normal = textureLoad(t_normal, vec2<i32>(0, 0), 0).rgb;
+    let albedo = subpassLoad(t_albedo).rgb;
+    let normal = subpassLoad(t_normal).rgb;
     // ... lighting calculation ...
 }
 ```
 
-The `@input_attachment_index(N)` attribute marks a `texture_2d` variable as a subpass input attachment. The coordinates passed to `textureLoad` are ignored -- the backend reads from the current fragment position automatically. naga compiles this to:
+`subpass_input*` declarations identify the attachment through `@binding` only. `subpassLoad` reads from the current fragment position. naga compiles this to:
 - **SPIR-V**: `OpTypeImage` with `Dim=SubpassData`, `InputAttachmentIndex` decoration
 - **MSL**: `[[color(N)]]` fragment function parameter (tile memory read)
 - **GLSL**: `inout` color attachment via `EXT_shader_framebuffer_fetch`, or `texelFetch(sampler, ivec2(gl_FragCoord.xy), 0)` fallback
@@ -279,4 +279,3 @@ Exactly which WGSL features `wgpu` supports depends on how you are using it:
 [wgsl spec]: https://gpuweb.github.io/gpuweb/wgsl/
 [naga]: https://github.com/gfx-rs/wgpu/tree/trunk/naga/
 [naga bugs]: https://github.com/gfx-rs/wgpu/issues?q=is%3Aissue%20state%3Aopen%20label%3A%22naga%22
-

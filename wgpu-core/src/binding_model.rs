@@ -488,6 +488,9 @@ impl BindingTypeMaxCountValidator {
                 wgt::BindingType::Texture { .. } => {
                     self.sampled_textures.add(binding.visibility, count);
                 }
+                wgt::BindingType::SubpassInput { .. } => {
+                    self.sampled_textures.add(binding.visibility, count);
+                }
                 wgt::BindingType::StorageTexture { .. } => {
                     self.storage_textures.add(binding.visibility, count);
                 }

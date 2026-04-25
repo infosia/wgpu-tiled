@@ -5205,8 +5205,8 @@ fn bitwise_shift_errors() {
 fn subpass_input_invalid_operations() {
     check_validation! {
         r#"
-            @group(0) @binding(0) @input_attachment_index(0)
-            var gbuffer: texture_2d<f32>;
+            @group(0) @binding(0)
+            var gbuffer: subpass_input<f32>;
 
             @group(0) @binding(1)
             var samp: sampler;
@@ -5229,8 +5229,8 @@ fn subpass_input_invalid_operations() {
 
     check_validation! {
         r#"
-            @group(0) @binding(0) @input_attachment_index(0)
-            var gbuffer: texture_2d<f32>;
+            @group(0) @binding(0)
+            var gbuffer: subpass_input<f32>;
 
             @fragment
             fn main() -> @location(0) vec4<f32> {
@@ -5239,8 +5239,8 @@ fn subpass_input_invalid_operations() {
             }
         "#,
         r#"
-            @group(0) @binding(0) @input_attachment_index(0)
-            var gbuffer: texture_2d<f32>;
+            @group(0) @binding(0)
+            var gbuffer: subpass_input<f32>;
 
             @fragment
             fn main() -> @location(0) vec4<f32> {
@@ -5264,8 +5264,8 @@ fn subpass_input_invalid_operations() {
 fn subpass_load_fragment_only() {
     check_validation! {
         r#"
-            @group(0) @binding(0) @input_attachment_index(0)
-            var gbuffer: texture_2d<f32>;
+            @group(0) @binding(0)
+            var gbuffer: subpass_input<f32>;
 
             @vertex
             fn main() -> @builtin(position) vec4<f32> {
@@ -5282,8 +5282,8 @@ fn subpass_load_fragment_only() {
 
     check_validation! {
         r#"
-            @group(0) @binding(0) @input_attachment_index(0)
-            var gbuffer: texture_2d<f32>;
+            @group(0) @binding(0)
+            var gbuffer: subpass_input<f32>;
 
             @compute @workgroup_size(1)
             fn main() {

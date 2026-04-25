@@ -136,6 +136,65 @@ fn get_subpass_attachment_remaps(
     ))
 }
 
+fn build_subpass_color_slot_map(
+    stage: &crate::ProgrammableStage<super::ShaderModule>,
+    target: Option<&wgt::SubpassTarget>,
+) -> Result<naga::FastHashMap<(u32, u32), u32>, crate::PipelineError> {
+    let mut slots = naga::FastHashMap::default();
+    let Some(target) = target else {
+        return Ok(slots);
+    };
+    let subpass_desc = target
+        .subpass_descs
+        .get(target.index as usize)
+        .ok_or_else(|| {
+            crate::PipelineError::Linkage(
+                wgt::ShaderStages::FRAGMENT,
+                alloc::format!(
+                    "subpass target index {} is out of bounds for {} declared subpasses",
+                    target.index,
+                    target.subpass_descs.len()
+                ),
+            )
+        })?;
+    let ShaderModuleSource::Naga(ref naga_shader) = stage.module.source else {
+        return Ok(slots);
+    };
+
+    for (_, global) in naga_shader.module.global_variables.iter() {
+        let Some(binding) = global.binding else {
+            continue;
+        };
+        let class = match naga_shader.module.types[global.ty].inner {
+            naga::TypeInner::Image { class, .. } => class,
+            _ => continue,
+        };
+        if !class.is_subpass_input() {
+            continue;
+        }
+
+        let Some(&attachment_slot) = subpass_desc
+            .input_attachment_indices
+            .get(binding.binding as usize)
+        else {
+            return Err(crate::PipelineError::Linkage(
+                wgt::ShaderStages::FRAGMENT,
+                alloc::format!(
+                    "subpass input binding {} is out of range for {} declared input attachments",
+                    binding.binding,
+                    subpass_desc.input_attachment_indices.len()
+                ),
+            ));
+        };
+
+        if attachment_slot != u32::MAX {
+            slots.insert((binding.group, binding.binding), attachment_slot);
+        }
+    }
+
+    Ok(slots)
+}
+
 fn should_use_disabled_depth_stencil_state_for_subpass(
     depth_stencil: Option<&wgt::DepthStencilState>,
     subpass_target: Option<&wgt::SubpassTarget>,
@@ -214,11 +273,13 @@ fn remap_fragment_output_binding(binding: &mut Option<naga::Binding>, remap: &[u
 }
 
 impl super::Device {
+    #[allow(clippy::too_many_arguments)]
     fn load_shader(
         &self,
         stage: &crate::ProgrammableStage<super::ShaderModule>,
         vertex_buffer_mappings: &[naga::back::msl::VertexBufferMapping],
         fragment_color_output_remap: Option<&[u32]>,
+        subpass_color_slots: &naga::FastHashMap<(u32, u32), u32>,
         layout: &super::PipelineLayout,
         primitive_class: MTLPrimitiveTopologyClass,
         naga_stage: naga::ShaderStage,
@@ -304,6 +365,7 @@ impl super::Device {
                         // TODO: support bounds checks on binding arrays
                         binding_array: naga::proc::BoundsCheckPolicy::Unchecked,
                     },
+                    subpass_color_slots: subpass_color_slots.clone(),
                     zero_initialize_workgroup_memory: stage.zero_initialize_workgroup_memory,
                     force_loop_bounding: stage.module.bounds_checks.force_loop_bounding,
                 };
@@ -988,6 +1050,10 @@ impl crate::Device for super::Device {
                                 target.texture = Some(info.counters.textures as _);
                                 info.counters.textures += 1;
                             }
+                            wgt::BindingType::SubpassInput { .. } => {
+                                target.texture = Some(info.counters.textures as _);
+                                info.counters.textures += 1;
+                            }
                             wgt::BindingType::StorageTexture { access, .. } => {
                                 target.texture = Some(info.counters.textures as _);
                                 info.counters.textures += 1;
@@ -1021,7 +1087,6 @@ impl crate::Device for super::Device {
                     let br = naga::ResourceBinding {
                         group: group_index as u32,
                         binding: entry.binding,
-                        input_attachment_index: None,
                     };
                     info.resources.insert(br, target);
                 }
@@ -1140,6 +1205,7 @@ impl crate::Device for super::Device {
 
                         match layout.ty {
                             wgt::BindingType::Texture { .. }
+                            | wgt::BindingType::SubpassInput { .. }
                             | wgt::BindingType::StorageTexture { .. } => {
                                 let start = entry.resource_index as usize;
                                 let end = start + count as usize;
@@ -1262,6 +1328,7 @@ impl crate::Device for super::Device {
                                 counter.samplers += 1;
                             }
                             wgt::BindingType::Texture { .. }
+                            | wgt::BindingType::SubpassInput { .. }
                             | wgt::BindingType::StorageTexture { .. } => {
                                 let start = entry.resource_index as usize;
                                 let end = start + 1;
@@ -1451,6 +1518,7 @@ impl crate::Device for super::Device {
             let ms_info;
 
             // Create the pipeline descriptor and do vertex/mesh pipeline specific setup
+            let empty_subpass_color_slots = naga::FastHashMap::default();
             let descriptor = match desc.vertex_processor {
                 crate::VertexProcessor::Standard {
                     vertex_buffers,
@@ -1508,6 +1576,7 @@ impl crate::Device for super::Device {
                             vertex_stage,
                             &vertex_buffer_mappings,
                             None,
+                            &empty_subpass_color_slots,
                             desc.layout,
                             primitive_class,
                             naga::ShaderStage::Vertex,
@@ -1615,6 +1684,7 @@ impl crate::Device for super::Device {
                             task_stage,
                             &[],
                             None,
+                            &empty_subpass_color_slots,
                             desc.layout,
                             primitive_class,
                             naga::ShaderStage::Task,
@@ -1645,6 +1715,7 @@ impl crate::Device for super::Device {
                             mesh_stage,
                             &[],
                             None,
+                            &empty_subpass_color_slots,
                             desc.layout,
                             primitive_class,
                             naga::ShaderStage::Mesh,
@@ -1696,6 +1767,11 @@ impl crate::Device for super::Device {
             } else {
                 None
             };
+            let fragment_subpass_color_slots = if let Some(ref stage) = desc.fragment_stage {
+                build_subpass_color_slot_map(stage, desc.subpass_target)?
+            } else {
+                naga::FastHashMap::default()
+            };
 
             // Fragment shader
             let fs_info = match desc.fragment_stage {
@@ -1704,6 +1780,7 @@ impl crate::Device for super::Device {
                         stage,
                         &[],
                         fragment_output_remap,
+                        &fragment_subpass_color_slots,
                         desc.layout,
                         primitive_class,
                         naga::ShaderStage::Fragment,
@@ -1990,6 +2067,7 @@ impl crate::Device for super::Device {
                     &desc.stage,
                     &[],
                     None,
+                    &naga::FastHashMap::default(),
                     desc.layout,
                     MTLPrimitiveTopologyClass::Unspecified,
                     naga::ShaderStage::Compute,

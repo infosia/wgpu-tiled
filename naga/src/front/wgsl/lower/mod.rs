@@ -1322,7 +1322,7 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
                             .map(|ast| self.resolve_ast_type(ast, &mut ctx.as_const()))
                             .transpose()?;
 
-                    let (mut ty, initializer) = self.type_and_init(
+                    let (ty, initializer) = self.type_and_init(
                         v.name,
                         v.init,
                         explicit_ty,
@@ -1331,68 +1331,9 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
                     )?;
 
                     let binding = if let Some(ref binding) = v.binding {
-                        let input_attachment_index = binding
-                            .input_attachment_index
-                            .map(|expr| {
-                                self.const_u32(expr, &mut ctx.as_const())
-                                    .map(|(value, _)| value)
-                            })
-                            .transpose()?;
-
-                        if input_attachment_index.is_some() {
-                            let input_attachment_span = binding
-                                .input_attachment_index
-                                .map(|expr| ctx.ast_expressions.get_span(expr))
-                                .unwrap_or(span);
-                            let image = match ctx.module.types[ty].inner {
-                                ir::TypeInner::Image {
-                                    dim: ir::ImageDimension::D2,
-                                    arrayed: false,
-                                    class: ir::ImageClass::Sampled { kind, multi: false },
-                                } => ir::TypeInner::Image {
-                                    dim: ir::ImageDimension::D2,
-                                    arrayed: false,
-                                    class: ir::ImageClass::SubpassInput { kind, multi: false },
-                                },
-                                ir::TypeInner::Image {
-                                    dim: ir::ImageDimension::D2,
-                                    arrayed: false,
-                                    class: ir::ImageClass::Depth { multi: false },
-                                } => ir::TypeInner::Image {
-                                    dim: ir::ImageDimension::D2,
-                                    arrayed: false,
-                                    class: ir::ImageClass::SubpassInputDepth { multi: false },
-                                },
-                                ir::TypeInner::Image {
-                                    dim: ir::ImageDimension::D2,
-                                    arrayed: false,
-                                    class: ir::ImageClass::Sampled { multi: true, .. },
-                                }
-                                | ir::TypeInner::Image {
-                                    dim: ir::ImageDimension::D2,
-                                    arrayed: false,
-                                    class: ir::ImageClass::Depth { multi: true },
-                                } => {
-                                    // Multisampled input attachments still need backend-specific
-                                    // sample-selection semantics, so reject them until that
-                                    // behavior is implemented consistently.
-                                    return Err(Box::new(
-                                        Error::UnsupportedMultisampledInputAttachment(
-                                            input_attachment_span,
-                                        ),
-                                    ));
-                                }
-                                _ => {
-                                    return Err(Box::new(Error::BadTexture(input_attachment_span)));
-                                }
-                            };
-                            ty = ctx.ensure_type_exists(None, image);
-                        }
-
                         Some(ir::ResourceBinding {
                             group: self.const_u32(binding.group, &mut ctx.as_const())?.0,
                             binding: self.const_u32(binding.binding, &mut ctx.as_const())?.0,
-                            input_attachment_index,
                         })
                     } else {
                         None
@@ -2906,6 +2847,23 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
                             dim,
                             arrayed,
                             class: ir::ImageClass::Sampled { kind, multi },
+                        }
+                    }
+                    conv::TypeGenerator::SubpassInput { multi } => {
+                        let (scalar, span) = tl.scalar_ty(self, ctx)?;
+                        let ir::Scalar { kind, width } = scalar;
+                        if width != 4
+                            || !matches!(
+                                kind,
+                                ir::ScalarKind::Float | ir::ScalarKind::Sint | ir::ScalarKind::Uint
+                            )
+                        {
+                            return Err(Box::new(Error::BadTextureSampleType { span, scalar }));
+                        }
+                        ir::TypeInner::Image {
+                            dim: ir::ImageDimension::D2,
+                            arrayed: false,
+                            class: ir::ImageClass::SubpassInput { kind, multi },
                         }
                     }
                     conv::TypeGenerator::StorageTexture { dim, arrayed } => {
@@ -4517,7 +4475,9 @@ impl<'source, 'temp> Lowerer<'source, 'temp> {
 
                     // When applied to other sampled types, its `level` argument
                     // is an `f32`.
-                    ir::ImageClass::Sampled { .. } | ir::ImageClass::SubpassInput { .. } => {
+                    ir::ImageClass::Sampled { .. }
+                    | ir::ImageClass::SubpassInput { .. }
+                    | ir::ImageClass::SubpassInputStencil { .. } => {
                         self.expression_with_leaf_scalar(args.next()?, ir::Scalar::F32, ctx)?
                     }
 

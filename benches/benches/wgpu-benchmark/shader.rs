@@ -473,6 +473,7 @@ pub fn backends(ctx: BenchmarkContext) -> anyhow::Result<Vec<SubBenchResult>> {
                 binding_map: Default::default(),
                 zero_initialize_workgroup_memory: true,
                 use_framebuffer_fetch: false,
+                subpass_color_slots: Default::default(),
             };
             for input in &inputs.inner {
                 if !input.options.targets.unwrap().contains(Targets::GLSL) {

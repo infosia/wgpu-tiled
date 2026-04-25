@@ -408,6 +408,17 @@ impl LocalImageType {
                     image_format: spirv::ImageFormat::Unknown,
                 }
             }
+            crate::ImageClass::SubpassInputStencil { multi } => {
+                spirv_dim = spirv::Dim::DimSubpassData;
+                let mut flags = make_flags(multi, ImageTypeFlags::SAMPLED);
+                flags.remove(ImageTypeFlags::SAMPLED);
+                LocalImageType {
+                    sampled_type: crate::Scalar::U32,
+                    dim: spirv_dim,
+                    flags,
+                    image_format: spirv::ImageFormat::Unknown,
+                }
+            }
             crate::ImageClass::Storage { format, access: _ } => LocalImageType {
                 sampled_type: format.into(),
                 dim: spirv_dim,

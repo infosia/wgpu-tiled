@@ -2531,7 +2531,6 @@ impl Device {
                             let rb = naga::ResourceBinding {
                                 group: group_index as u32,
                                 binding: entry.binding,
-                                input_attachment_index: None,
                             };
                             let shader_size =
                                 shader_binding_sizes.get(&rb).map_or(0, |nz| nz.get());
@@ -2654,6 +2653,10 @@ impl Device {
                         WritableStorage::No,
                     )
                 }
+                Bt::SubpassInput { .. } => (
+                    Some(wgt::Features::TEXTURE_BINDING_ARRAY),
+                    WritableStorage::No,
+                ),
                 Bt::StorageTexture {
                     access,
                     view_dimension,

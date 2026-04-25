@@ -16,7 +16,7 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
 }
 
 // Input attachment: HDR lit color from subpass 1 (render-pass color slot 2)
-@group(0) @binding(0) @input_attachment_index(2) var t_lit_color: texture_2d<f32>;
+@group(0) @binding(0) var t_lit_color: subpass_input<f32>;
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {

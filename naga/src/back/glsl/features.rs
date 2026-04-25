@@ -414,7 +414,8 @@ impl<W> Writer<'_, W> {
                         ImageClass::Sampled { multi: true, .. }
                         | ImageClass::Depth { multi: true }
                         | ImageClass::SubpassInput { multi: true, .. }
-                        | ImageClass::SubpassInputDepth { multi: true } => {
+                        | ImageClass::SubpassInputDepth { multi: true }
+                        | ImageClass::SubpassInputStencil { multi: true } => {
                             self.features.request(Features::MULTISAMPLED_TEXTURES);
                             if arrayed {
                                 self.features.request(Features::MULTISAMPLED_TEXTURE_ARRAYS);
@@ -450,6 +451,7 @@ impl<W> Writer<'_, W> {
                         | ImageClass::Depth { multi: false }
                         | ImageClass::SubpassInput { multi: false, .. }
                         | ImageClass::SubpassInputDepth { multi: false }
+                        | ImageClass::SubpassInputStencil { multi: false }
                         | ImageClass::External => {}
                     }
                 }

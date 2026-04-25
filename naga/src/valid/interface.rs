@@ -29,8 +29,6 @@ pub enum GlobalVariableError {
     UnsupportedCapability(Capabilities),
     #[error("Binding decoration is missing or not applicable")]
     InvalidBinding,
-    #[error("`@input_attachment_index` must be present if and only if the variable type is a subpass input image")]
-    InvalidInputAttachmentIndex,
     #[error("Subpass input variables must be declared in the `handle` address space, found {0:?}")]
     InvalidSubpassInputAddressSpace(crate::AddressSpace),
     #[error("Alignment requirements for address space {0:?} are not met by {1:?}")]
@@ -197,6 +195,10 @@ pub enum EntryPointError {
     IncomingRayPayloadInInvalidStage(crate::ShaderStage),
     #[error("Subpass input variables can only be used from fragment entry points, not {0:?}")]
     SubpassInputInInvalidStage(crate::ShaderStage),
+    #[error("Subpass input variables used by one entry point must all be in one bind group, found groups {groups:?}")]
+    SubpassInputsAcrossMultipleBindGroups { groups: Vec<u32> },
+    #[error("Multisampled subpass input types are not supported yet: {reason}")]
+    MsaaSubpassInputNotYetSupported { reason: &'static str },
 }
 
 fn storage_usage(access: crate::StorageAccess) -> GlobalUse {
@@ -946,7 +948,8 @@ impl super::Validator {
                             crate::ImageClass::Sampled { .. }
                             | crate::ImageClass::Depth { .. }
                             | crate::ImageClass::SubpassInput { .. }
-                            | crate::ImageClass::SubpassInputDepth { .. } => {
+                            | crate::ImageClass::SubpassInputDepth { .. }
+                            | crate::ImageClass::SubpassInputStencil { .. } => {
                                 if !self
                                     .capabilities
                                     .contains(Capabilities::TEXTURE_AND_SAMPLER_BINDING_ARRAY)
@@ -1185,12 +1188,6 @@ impl super::Validator {
             gctx.types[inner_ty].inner,
             crate::TypeInner::Image { class, .. } if class.is_subpass_input()
         );
-        let has_input_attachment_index = var
-            .binding
-            .is_some_and(|binding| binding.input_attachment_index.is_some());
-        if is_subpass_input != has_input_attachment_index {
-            return Err(GlobalVariableError::InvalidInputAttachmentIndex);
-        }
         if is_subpass_input && var.space != crate::AddressSpace::Handle {
             return Err(GlobalVariableError::InvalidSubpassInputAddressSpace(
                 var.space,
@@ -1460,25 +1457,38 @@ impl super::Validator {
         }
 
         self.ep_resource_bindings.clear();
+        let mut subpass_input_groups = Vec::new();
         for (var_handle, var) in module.global_variables.iter() {
             let usage = info[var_handle];
             if usage.is_empty() {
                 continue;
             }
 
-            let is_subpass_input = match module.types[var.ty].inner {
-                crate::TypeInner::Image { class, .. } => class.is_subpass_input(),
-                crate::TypeInner::BindingArray { base, .. } => {
-                    matches!(
-                        module.types[base].inner,
-                        crate::TypeInner::Image { class, .. } if class.is_subpass_input()
-                    )
-                }
-                _ => false,
+            let image_class = match module.types[var.ty].inner {
+                crate::TypeInner::Image { class, .. } => Some(class),
+                crate::TypeInner::BindingArray { base, .. } => match module.types[base].inner {
+                    crate::TypeInner::Image { class, .. } => Some(class),
+                    _ => None,
+                },
+                _ => None,
             };
+            let is_subpass_input = image_class.is_some_and(crate::ImageClass::is_subpass_input);
             if is_subpass_input && ep.stage != crate::ShaderStage::Fragment {
                 return Err(EntryPointError::SubpassInputInInvalidStage(ep.stage)
                     .with_span_handle(var_handle, &module.global_variables));
+            }
+            if let Some(class) = image_class.filter(|class| class.is_subpass_input()) {
+                if class.is_multisampled() {
+                    return Err(EntryPointError::MsaaSubpassInputNotYetSupported {
+                        reason: "sample-frequency semantics are not implemented yet",
+                    }
+                    .with_span_handle(var_handle, &module.global_variables));
+                }
+                if let Some(binding) = var.binding {
+                    if !subpass_input_groups.contains(&binding.group) {
+                        subpass_input_groups.push(binding.group);
+                    }
+                }
             }
 
             if var.space == crate::AddressSpace::TaskPayload {
@@ -1564,6 +1574,13 @@ impl super::Validator {
                     }
                 }
             }
+        }
+        if subpass_input_groups.len() > 1 {
+            subpass_input_groups.sort_unstable();
+            return Err(EntryPointError::SubpassInputsAcrossMultipleBindGroups {
+                groups: subpass_input_groups,
+            }
+            .with_span());
         }
 
         // If this is a `Mesh` entry point, check its vertex and primitive output types.

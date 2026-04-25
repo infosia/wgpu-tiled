@@ -151,6 +151,8 @@ pub enum Error {
     NonBindingArrayOfImageOrSamplers,
     #[error("naga only supports specialization constant IDs up to 65535 but was given {0}")]
     SpecIdTooHigh(u32),
+    #[error("input attachment decoration index {decoration} does not match descriptor binding {binding}")]
+    InputAttachmentDecorationMismatchesBinding { decoration: u32, binding: u32 },
 
     #[error("atomic upgrade error: {0}")]
     AtomicUpgradeError(atomic_upgrade::Error),

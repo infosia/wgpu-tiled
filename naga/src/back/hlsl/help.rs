@@ -212,7 +212,8 @@ impl<W: Write> super::Writer<'_, W> {
                 );
             }
             crate::ImageClass::SubpassInput { .. }
-            | crate::ImageClass::SubpassInputDepth { .. } => unreachable!(),
+            | crate::ImageClass::SubpassInputDepth { .. }
+            | crate::ImageClass::SubpassInputStencil { .. } => unreachable!(),
         }
         Ok(())
     }
@@ -580,7 +581,8 @@ impl<W: Write> super::Writer<'_, W> {
             crate::ImageClass::Storage { .. } => "RW",
             crate::ImageClass::External => "External",
             crate::ImageClass::SubpassInput { .. }
-            | crate::ImageClass::SubpassInputDepth { .. } => {
+            | crate::ImageClass::SubpassInputDepth { .. }
+            | crate::ImageClass::SubpassInputStencil { .. } => {
                 return Err(super::Error::Custom(
                     "subpass inputs are not supported by the HLSL backend".into(),
                 ));
@@ -676,7 +678,8 @@ impl<W: Write> super::Writer<'_, W> {
                     crate::ImageClass::Sampled { .. } | crate::ImageClass::Depth { .. } => 1,
                     crate::ImageClass::External => unreachable!(),
                     crate::ImageClass::SubpassInput { .. }
-                    | crate::ImageClass::SubpassInputDepth { .. } => {
+                    | crate::ImageClass::SubpassInputDepth { .. }
+                    | crate::ImageClass::SubpassInputStencil { .. } => {
                         return Err(super::Error::Custom(
                             "subpass inputs are not supported by the HLSL backend".into(),
                         ));

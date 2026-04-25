@@ -434,7 +434,8 @@ impl super::ImageClass {
             crate::ImageClass::Sampled { multi, .. }
             | crate::ImageClass::Depth { multi }
             | crate::ImageClass::SubpassInput { multi, .. }
-            | crate::ImageClass::SubpassInputDepth { multi } => multi,
+            | crate::ImageClass::SubpassInputDepth { multi }
+            | crate::ImageClass::SubpassInputStencil { multi } => multi,
             crate::ImageClass::Storage { .. } | crate::ImageClass::External => false,
         }
     }
@@ -445,7 +446,8 @@ impl super::ImageClass {
             crate::ImageClass::Storage { .. }
             | crate::ImageClass::External
             | crate::ImageClass::SubpassInput { .. }
-            | crate::ImageClass::SubpassInputDepth { .. } => false,
+            | crate::ImageClass::SubpassInputDepth { .. }
+            | crate::ImageClass::SubpassInputStencil { .. } => false,
         }
     }
 
@@ -459,7 +461,9 @@ impl super::ImageClass {
     pub const fn is_subpass_input(self) -> bool {
         matches!(
             self,
-            crate::ImageClass::SubpassInput { .. } | crate::ImageClass::SubpassInputDepth { .. }
+            crate::ImageClass::SubpassInput { .. }
+                | crate::ImageClass::SubpassInputDepth { .. }
+                | crate::ImageClass::SubpassInputStencil { .. }
         )
     }
 }

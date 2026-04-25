@@ -747,6 +747,7 @@ struct ProgramStage {
 struct ProgramCacheKey {
     stages: ArrayVec<ProgramStage, 3>,
     group_to_binding_to_slot: Box<[Option<Box<[u8]>>]>,
+    subpass_color_slots: Box<[((u32, u32), u32)]>,
 }
 
 type ProgramCache = FastHashMap<ProgramCacheKey, Result<Arc<PipelineInner>, crate::PipelineError>>;

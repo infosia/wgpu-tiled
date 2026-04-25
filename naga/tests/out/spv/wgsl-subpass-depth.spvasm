@@ -10,7 +10,7 @@ OpEntryPoint Fragment %11 "main" %9
 OpExecutionMode %11 OriginUpperLeft
 OpDecorate %6 DescriptorSet 0
 OpDecorate %6 Binding 0
-OpDecorate %6 InputAttachmentIndex 1
+OpDecorate %6 InputAttachmentIndex 0
 OpDecorate %9 Location 0
 %2 = OpTypeVoid
 %4 = OpTypeFloat 32

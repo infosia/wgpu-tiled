@@ -225,6 +225,7 @@ impl RenderpassState {
                     }),
                     multiview_mask: None,
                     cache: None,
+                    subpass_target: None,
                 });
 
         let render_target = device_state
@@ -323,6 +324,7 @@ impl RenderpassState {
                     }),
                     multiview_mask: None,
                     cache: None,
+                    subpass_target: None,
                 },
             ));
         }
@@ -370,6 +372,10 @@ impl RenderpassState {
             timestamp_writes: None,
             depth_stencil_attachment: None,
             multiview_mask: None,
+            subpasses: &[],
+            subpass_dependencies: &[],
+            transient_memory_hint: wgpu::TransientMemoryHint::Auto,
+            active_subpass_mask: None,
         });
 
         let start_idx = pass_number * draws_per_pass;
@@ -419,6 +425,10 @@ impl RenderpassState {
             timestamp_writes: None,
             depth_stencil_attachment: None,
             multiview_mask: None,
+            subpasses: &[],
+            subpass_dependencies: &[],
+            transient_memory_hint: wgpu::TransientMemoryHint::Auto,
+            active_subpass_mask: None,
         });
 
         render_pass.set_pipeline(self.bindless_pipeline.as_ref().unwrap());

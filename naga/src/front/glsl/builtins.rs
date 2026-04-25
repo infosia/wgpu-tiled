@@ -2162,7 +2162,9 @@ impl Frontend {
             let (shadow, storage) = match class {
                 ImageClass::Depth { .. } | ImageClass::SubpassInputDepth { .. } => (true, false),
                 ImageClass::Storage { .. } => (false, true),
-                ImageClass::Sampled { .. } | ImageClass::SubpassInput { .. } => (false, false),
+                ImageClass::Sampled { .. }
+                | ImageClass::SubpassInput { .. }
+                | ImageClass::SubpassInputStencil { .. } => (false, false),
                 ImageClass::External => unreachable!(),
             };
 
@@ -2294,6 +2296,10 @@ pub fn sampled_to_depth(
             }
             ImageClass::Depth { .. } => {}
             ImageClass::SubpassInputDepth { .. } => {}
+            ImageClass::SubpassInputStencil { .. } => errors.push(Error {
+                kind: ErrorKind::SemanticError("Not a texture".into()),
+                meta,
+            }),
             // Other image classes aren't allowed to be transformed to depth
             ImageClass::Storage { .. } => errors.push(Error {
                 kind: ErrorKind::SemanticError("Not a texture".into()),

@@ -1,5 +1,5 @@
-@group(0) @binding(0) @input_attachment_index(1)
-var gbuffer_depth: texture_depth_2d;
+@group(0) @binding(0)
+var gbuffer_depth: subpass_input_depth;
 
 @fragment
 fn main() -> @location(0) vec4<f32> {

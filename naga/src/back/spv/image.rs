@@ -116,7 +116,8 @@ impl Load {
         let opcode = match image_class {
             crate::ImageClass::Storage { .. }
             | crate::ImageClass::SubpassInput { .. }
-            | crate::ImageClass::SubpassInputDepth { .. } => spirv::Op::ImageRead,
+            | crate::ImageClass::SubpassInputDepth { .. }
+            | crate::ImageClass::SubpassInputStencil { .. } => spirv::Op::ImageRead,
             crate::ImageClass::Depth { .. } | crate::ImageClass::Sampled { .. } => {
                 spirv::Op::ImageFetch
             }
@@ -134,6 +135,12 @@ impl Load {
                     size: crate::VectorSize::Quad,
                     scalar: crate::Scalar::F32,
                 }),
+            crate::ImageClass::SubpassInputStencil { .. } => {
+                ctx.get_numeric_type_id(NumericType::Vector {
+                    size: crate::VectorSize::Quad,
+                    scalar: crate::Scalar::U32,
+                })
+            }
             _ => result_type_id,
         };
 

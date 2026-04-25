@@ -341,6 +341,8 @@ pub struct Options {
     /// Emit `GL_EXT_shader_framebuffer_fetch`-style `inout` globals for
     /// subpass input attachments in fragment shaders.
     pub use_framebuffer_fetch: bool,
+    /// Mapping from `(group, binding)` to render-pass color slot for subpass inputs.
+    pub subpass_color_slots: crate::FastHashMap<(u32, u32), u32>,
 }
 
 impl Default for Options {
@@ -351,6 +353,7 @@ impl Default for Options {
             binding_map: BindingMap::default(),
             zero_initialize_workgroup_memory: true,
             use_framebuffer_fetch: false,
+            subpass_color_slots: crate::FastHashMap::default(),
         }
     }
 }

@@ -18,8 +18,8 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
 }
 
 // Input attachments: read from tile memory (G-Buffer output from subpass 0)
-@group(0) @binding(0) @input_attachment_index(0) var t_albedo: texture_2d<f32>;
-@group(0) @binding(1) @input_attachment_index(1) var t_normal: texture_2d<f32>;
+@group(0) @binding(0) var t_albedo: subpass_input<f32>;
+@group(0) @binding(1) var t_normal: subpass_input<f32>;
 
 struct LightParams {
     lights: array<vec4<f32>, 4>,   // xyz = position, w = intensity

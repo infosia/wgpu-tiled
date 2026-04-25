@@ -696,14 +696,14 @@ impl crate::framework::Example for Example {
                 // Bindings must match lighting.wgsl: @binding(0) = albedo, @binding(1) = normal
                 input_attachments: &[
                     wgpu::SubpassInputAttachment {
-                        binding: 0, // → @binding(0) @input_attachment_index(0) t_albedo
+                        binding: 0, // → @binding(0) t_albedo
                         source: wgpu::SubpassInputSource::Color {
                             subpass: wgpu::SubpassIndex(0),
                             attachment_index: 0, // render pass color attachment 0
                         },
                     },
                     wgpu::SubpassInputAttachment {
-                        binding: 1, // → @binding(1) @input_attachment_index(1) t_normal
+                        binding: 1, // → @binding(1) t_normal
                         source: wgpu::SubpassInputSource::Color {
                             subpass: wgpu::SubpassIndex(0),
                             attachment_index: 1, // render pass color attachment 1
@@ -714,10 +714,9 @@ impl crate::framework::Example for Example {
             wgpu::SubpassDescriptor {
                 color_attachment_indices: &[3],
                 uses_depth_stencil: false,
-                // Binding must match composite.wgsl:
-                // @binding(0) @input_attachment_index(2) = lit HDR color.
+                // Binding must match composite.wgsl: @binding(0) = lit HDR color.
                 input_attachments: &[wgpu::SubpassInputAttachment {
-                    binding: 0, // → @binding(0) @input_attachment_index(2) t_lit_color
+                    binding: 0, // → @binding(0) t_lit_color
                     source: wgpu::SubpassInputSource::Color {
                         subpass: wgpu::SubpassIndex(1),
                         attachment_index: 0, // source subpass color slot 0 (lit = render-pass attachment 2)

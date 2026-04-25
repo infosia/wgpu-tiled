@@ -69,6 +69,7 @@ impl From<&BindingType> for BindingTypeName {
         match ty {
             BindingType::Buffer { .. } => BindingTypeName::Buffer,
             BindingType::Texture { .. } => BindingTypeName::Texture,
+            BindingType::SubpassInput { .. } => BindingTypeName::Texture,
             BindingType::StorageTexture { .. } => BindingTypeName::Texture,
             BindingType::Sampler { .. } => BindingTypeName::Sampler,
             BindingType::AccelerationStructure { .. } => BindingTypeName::AccelerationStructure,
@@ -511,6 +512,7 @@ impl Resource {
                 let view_dimension = match entry.ty {
                     BindingType::Texture { view_dimension, .. }
                     | BindingType::StorageTexture { view_dimension, .. } => view_dimension,
+                    BindingType::SubpassInput { .. } => wgt::TextureViewDimension::D2,
                     BindingType::ExternalTexture => wgt::TextureViewDimension::D2,
                     _ => {
                         return Err(BindingError::WrongTextureViewDimension {
@@ -567,6 +569,49 @@ impl Resource {
                                 multi,
                             },
                             wgt::TextureSampleType::Depth => naga::ImageClass::Depth { multi },
+                        };
+                        if shader_class == binding_class {
+                            Ok(())
+                        } else {
+                            Err(binding_class)
+                        }
+                    }
+                    BindingType::SubpassInput {
+                        sample_type,
+                        multisampled,
+                        aspect,
+                    } => {
+                        let binding_class = match (aspect, sample_type) {
+                            (
+                                wgt::SubpassInputAspect::Color,
+                                wgt::TextureSampleType::Float { .. },
+                            ) => naga::ImageClass::SubpassInput {
+                                kind: naga::ScalarKind::Float,
+                                multi: multisampled,
+                            },
+                            (wgt::SubpassInputAspect::Color, wgt::TextureSampleType::Sint) => {
+                                naga::ImageClass::SubpassInput {
+                                    kind: naga::ScalarKind::Sint,
+                                    multi: multisampled,
+                                }
+                            }
+                            (wgt::SubpassInputAspect::Color, wgt::TextureSampleType::Uint) => {
+                                naga::ImageClass::SubpassInput {
+                                    kind: naga::ScalarKind::Uint,
+                                    multi: multisampled,
+                                }
+                            }
+                            (wgt::SubpassInputAspect::Depth, wgt::TextureSampleType::Depth) => {
+                                naga::ImageClass::SubpassInputDepth {
+                                    multi: multisampled,
+                                }
+                            }
+                            (wgt::SubpassInputAspect::Stencil, wgt::TextureSampleType::Uint) => {
+                                naga::ImageClass::SubpassInputStencil {
+                                    multi: multisampled,
+                                }
+                            }
+                            _ => unreachable!(),
                         };
                         if shader_class == binding_class {
                             Ok(())
@@ -700,24 +745,29 @@ impl Resource {
                         view_dimension,
                         multisampled: multi,
                     },
-                    naga::ImageClass::SubpassInput { multi, kind } => BindingType::Texture {
+                    naga::ImageClass::SubpassInput { multi, kind } => BindingType::SubpassInput {
                         sample_type: match kind {
-                            naga::ScalarKind::Float => wgt::TextureSampleType::Float {
-                                filterable: is_reffed_by_sampler_in_entrypoint,
-                            },
+                            naga::ScalarKind::Float => {
+                                wgt::TextureSampleType::Float { filterable: false }
+                            }
                             naga::ScalarKind::Sint => wgt::TextureSampleType::Sint,
                             naga::ScalarKind::Uint => wgt::TextureSampleType::Uint,
                             naga::ScalarKind::AbstractInt
                             | naga::ScalarKind::AbstractFloat
                             | naga::ScalarKind::Bool => unreachable!(),
                         },
-                        view_dimension,
                         multisampled: multi,
+                        aspect: wgt::SubpassInputAspect::Color,
                     },
-                    naga::ImageClass::SubpassInputDepth { multi } => BindingType::Texture {
+                    naga::ImageClass::SubpassInputDepth { multi } => BindingType::SubpassInput {
                         sample_type: wgt::TextureSampleType::Depth,
-                        view_dimension,
                         multisampled: multi,
+                        aspect: wgt::SubpassInputAspect::Depth,
+                    },
+                    naga::ImageClass::SubpassInputStencil { multi } => BindingType::SubpassInput {
+                        sample_type: wgt::TextureSampleType::Uint,
+                        multisampled: multi,
+                        aspect: wgt::SubpassInputAspect::Stencil,
                     },
                     naga::ImageClass::Storage { format, access } => BindingType::StorageTexture {
                         access: {
@@ -1269,6 +1319,7 @@ impl Interface {
                 );
                 let texture_sample_type = match texture_layout.ty {
                     BindingType::Texture { sample_type, .. } => sample_type,
+                    BindingType::SubpassInput { sample_type, .. } => sample_type,
                     BindingType::ExternalTexture => {
                         wgt::TextureSampleType::Float { filterable: true }
                     }

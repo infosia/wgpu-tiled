@@ -308,6 +308,9 @@ impl Display for TypeContext<'_> {
                         crate::ImageClass::SubpassInputDepth { .. } => {
                             put_numeric_type(out, crate::Scalar::F32, &[])?;
                         }
+                        crate::ImageClass::SubpassInputStencil { .. } => {
+                            put_numeric_type(out, crate::Scalar::U32, &[])?;
+                        }
                         _ => unreachable!(),
                     }
                     return Ok(());
@@ -366,7 +369,8 @@ impl Display for TypeContext<'_> {
                         return write!(out, "{EXTERNAL_TEXTURE_WRAPPER_STRUCT}");
                     }
                     crate::ImageClass::SubpassInput { .. }
-                    | crate::ImageClass::SubpassInputDepth { .. } => unreachable!(),
+                    | crate::ImageClass::SubpassInputDepth { .. }
+                    | crate::ImageClass::SubpassInputStencil { .. } => unreachable!(),
                 };
                 let base_name = scalar.to_msl_name();
                 let array_str = if arrayed { "_array" } else { "" };
@@ -1479,12 +1483,14 @@ impl<W: Write> Writer<W> {
         };
         match class {
             crate::ImageClass::SubpassInput { multi: false, .. }
-            | crate::ImageClass::SubpassInputDepth { multi: false } => {
+            | crate::ImageClass::SubpassInputDepth { multi: false }
+            | crate::ImageClass::SubpassInputStencil { multi: false } => {
                 self.put_expression(image, context, false)?;
                 Ok(())
             }
             crate::ImageClass::SubpassInput { .. }
-            | crate::ImageClass::SubpassInputDepth { .. } => Err(Error::GenericValidation(
+            | crate::ImageClass::SubpassInputDepth { .. }
+            | crate::ImageClass::SubpassInputStencil { .. } => Err(Error::GenericValidation(
                 "multisampled subpass inputs are unsupported".into(),
             )),
             _ => Err(Error::GenericValidation(
@@ -7444,6 +7450,7 @@ template <typename A>
                                     | crate::ImageClass::Depth { .. }
                                     | crate::ImageClass::SubpassInput { .. }
                                     | crate::ImageClass::SubpassInputDepth { .. }
+                                    | crate::ImageClass::SubpassInputStencil { .. }
                                     | crate::ImageClass::Storage {
                                         access: crate::StorageAccess::LOAD,
                                         ..

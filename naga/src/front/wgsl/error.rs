@@ -187,7 +187,7 @@ pub(crate) enum Error<'a> {
     BadMatrixScalarKind(Span, Scalar),
     BadAccessor(Span),
     BadTexture(Span),
-    UnsupportedMultisampledInputAttachment(Span),
+    DeprecatedInputAttachmentIndex(Span),
     TextureLoadSubpassInput(Span),
     SubpassLoadNonInputAttachment(Span),
     BadTypeCast {
@@ -629,11 +629,11 @@ impl<'a> Error<'a> {
                 labels: vec![(bad_span, "not an image".into())],
                 notes: vec![],
             },
-            Error::UnsupportedMultisampledInputAttachment(span) => ParseError {
-                message: "multisampled input attachments are not supported yet".to_string(),
+            Error::DeprecatedInputAttachmentIndex(span) => ParseError {
+                message: "`@input_attachment_index` is no longer supported".to_string(),
                 labels: vec![(
                     span,
-                    "this input attachment uses a multisampled texture".into(),
+                    "use `subpass_input*` types and identify inputs by `@binding`".into(),
                 )],
                 notes: vec![],
             },
@@ -649,7 +649,7 @@ impl<'a> Error<'a> {
                 message: "subpassLoad requires an input attachment".to_string(),
                 labels: vec![(
                     span,
-                    "this texture is not declared with @input_attachment_index".into(),
+                    "this value is not a `subpass_input*` type".into(),
                 )],
                 notes: vec![],
             },

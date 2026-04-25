@@ -626,7 +626,6 @@ impl Frontend {
                         binding.map(|binding| ResourceBinding {
                             group: set.unwrap_or(0),
                             binding,
-                            input_attachment_index: None,
                         })
                     }
                     _ => None,

@@ -258,13 +258,8 @@ impl Decoration {
             Decoration {
                 desc_set: Some(group),
                 desc_index: Some(binding),
-                input_attachment_index,
                 ..
-            } => Some(crate::ResourceBinding {
-                group,
-                binding,
-                input_attachment_index,
-            }),
+            } => Some(crate::ResourceBinding { group, binding }),
             _ => None,
         }
     }
@@ -3007,6 +3002,24 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
             // samplers must be a binding array, and here we validate that guess
             if dec.desc_set.is_none() || dec.desc_index.is_none() {
                 return Err(Error::NonBindingArrayOfImageOrSamplers);
+            }
+        }
+
+        if let (Some(input_attachment_index), Some(binding)) =
+            (dec.input_attachment_index, dec.desc_index)
+        {
+            if let &crate::TypeInner::Image {
+                class,
+                dim: crate::ImageDimension::D2,
+                arrayed: false,
+            } = &module.types[ty].inner
+            {
+                if class.is_subpass_input() && input_attachment_index != binding {
+                    return Err(Error::InputAttachmentDecorationMismatchesBinding {
+                        decoration: input_attachment_index,
+                        binding,
+                    });
+                }
             }
         }
 
