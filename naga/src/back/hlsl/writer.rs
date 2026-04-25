@@ -2951,7 +2951,11 @@ impl<'a, W: fmt::Write> super::Writer<'a, W> {
                 write!(self.out, ").{number_of_components}")?
             }
             _ => {
-                return Err(Error::Override);
+                return Err(if self.options.allow_unresolved_overrides {
+                    Error::SpecializationConstantsUnsupported
+                } else {
+                    Error::Override
+                });
             }
         }
 
@@ -3018,7 +3022,13 @@ impl<'a, W: fmt::Write> super::Writer<'a, W> {
                     |writer, expr| writer.write_expr(module, expr, func_ctx),
                 )?;
             }
-            Expression::Override(_) => return Err(Error::Override),
+            Expression::Override(_) => {
+                return Err(if self.options.allow_unresolved_overrides {
+                    Error::SpecializationConstantsUnsupported
+                } else {
+                    Error::Override
+                });
+            }
             // Avoid undefined behaviour for addition, subtraction, and
             // multiplication of signed integers by casting operands to
             // unsigned, performing the operation, then casting the result back

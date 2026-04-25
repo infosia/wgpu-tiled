@@ -547,6 +547,9 @@ pub struct Writer<W> {
     /// Set of (struct type, struct field index) denoting which fields require
     /// padding inserted **before** them (i.e. between fields at index - 1 and index)
     struct_member_pads: FastHashSet<(Handle<crate::Type>, u32)>,
+    /// Mirror of [`Options::allow_unresolved_overrides`], cached for the duration
+    /// of a single [`Writer::write`] call so deeper helpers can branch on it.
+    allow_unresolved_overrides: bool,
 }
 
 impl crate::Scalar {
@@ -895,6 +898,7 @@ impl<W: Write> Writer<W> {
             #[cfg(test)]
             put_block_stack_pointers: Default::default(),
             struct_member_pads: FastHashSet::default(),
+            allow_unresolved_overrides: false,
         }
     }
 
@@ -1977,6 +1981,13 @@ impl<W: Write> Writer<W> {
                 put_expression(self, ctx, value)?;
                 write!(self.out, ")")?;
             }
+            crate::Expression::Override(handle) => {
+                if !self.allow_unresolved_overrides {
+                    return Err(Error::Override);
+                }
+                let name = &self.names[&NameKey::Override(handle)];
+                write!(self.out, "{name}")?;
+            }
             _ => {
                 return Err(Error::Override);
             }
@@ -2029,7 +2040,13 @@ impl<W: Write> Writer<W> {
                     |writer, context, expr| writer.put_expression(expr, context, true),
                 )?;
             }
-            crate::Expression::Override(_) => return Err(Error::Override),
+            crate::Expression::Override(handle) => {
+                if !self.allow_unresolved_overrides {
+                    return Err(Error::Override);
+                }
+                let name = &self.names[&NameKey::Override(handle)];
+                write!(self.out, "{name}")?;
+            }
             crate::Expression::Access { base, .. }
             | crate::Expression::AccessIndex { base, .. } => {
                 // This is an acceptable place to generate a `ReadZeroSkipWrite` check.
@@ -4478,6 +4495,7 @@ impl<W: Write> Writer<W> {
         );
         self.wrapped_functions.clear();
         self.struct_member_pads.clear();
+        self.allow_unresolved_overrides = options.allow_unresolved_overrides;
 
         writeln!(
             self.out,
@@ -4566,7 +4584,83 @@ impl<W: Write> Writer<W> {
 
         self.write_type_defs(module)?;
         self.write_global_constants(module, info)?;
+        if options.allow_unresolved_overrides {
+            self.validate_override_restrictions(module)?;
+            self.write_function_constants(module)?;
+        }
         self.write_functions(module, info, options, pipeline_options)
+    }
+
+    /// Emit `constant T <name> [[function_constant(N)]];` for every
+    /// [`crate::Override`] in `module`. Only scalar `bool` / `i32` / `u32` /
+    /// `f32` overrides are supported; defaults are not emitted because Metal
+    /// supplies them at pipeline creation via `MTLFunctionConstantValues`.
+    fn write_function_constants(&mut self, module: &crate::Module) -> BackendResult {
+        for (handle, override_) in module.overrides.iter() {
+            let scalar = match module.types[override_.ty].inner {
+                crate::TypeInner::Scalar(scalar) => scalar,
+                _ => {
+                    let display_name = override_.name.clone().unwrap_or_default();
+                    return Err(Error::OverrideTypeUnsupported(display_name));
+                }
+            };
+            match scalar.kind {
+                crate::ScalarKind::Bool
+                | crate::ScalarKind::Sint
+                | crate::ScalarKind::Uint
+                | crate::ScalarKind::Float => {}
+                crate::ScalarKind::AbstractInt | crate::ScalarKind::AbstractFloat => {
+                    let display_name = override_.name.clone().unwrap_or_default();
+                    return Err(Error::OverrideTypeUnsupported(display_name));
+                }
+            }
+            let id = override_
+                .id
+                .ok_or_else(|| Error::GenericValidation(String::from(
+                    "override missing implicit @id assignment",
+                )))?;
+            let ty_name = scalar.to_msl_name();
+            let name = &self.names[&NameKey::Override(handle)];
+            writeln!(
+                self.out,
+                "constant {ty_name} {name} [[function_constant({id})]];"
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Reject the override-restriction cases that the MSL backend cannot
+    /// represent natively (override-driven array length, override-driven
+    /// workgroup size). Mirrors the SPIR-V backend's restrictions so the
+    /// two emit paths stay aligned.
+    fn validate_override_restrictions(&self, module: &crate::Module) -> Result<(), Error> {
+        for (_, ty) in module.types.iter() {
+            if let crate::TypeInner::Array {
+                size: crate::ArraySize::Pending(handle),
+                ..
+            } = ty.inner
+            {
+                let display_name = module.overrides[handle]
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| String::from("<anonymous>"));
+                return Err(Error::OverrideAsArrayLengthUnsupported(display_name));
+            }
+        }
+        for entry in module.entry_points.iter() {
+            if let Some(ref overrides) = entry.workgroup_size_overrides {
+                for slot in overrides.iter().flatten() {
+                    if let crate::Expression::Override(handle) = module.global_expressions[*slot] {
+                        let display_name = module.overrides[handle]
+                            .name
+                            .clone()
+                            .unwrap_or_else(|| String::from("<anonymous>"));
+                        return Err(Error::OverrideInWorkgroupSizeUnsupported(display_name));
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Write the definition for the `DefaultConstructible` class.

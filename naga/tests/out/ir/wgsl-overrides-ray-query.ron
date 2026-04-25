@@ -93,7 +93,7 @@
     overrides: [
         (
             name: Some("o"),
-            id: None,
+            id: Some(0),
             ty: 0,
             init: None,
         ),

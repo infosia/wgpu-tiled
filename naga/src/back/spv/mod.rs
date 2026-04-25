@@ -172,6 +172,21 @@ pub enum Error {
     Validation(&'static str),
     #[error("overrides should not be present at this stage")]
     Override,
+    #[error(
+        "override `{0}` has an unsupported type for native specialization \
+         constants; only scalar bool/i32/u32/f32 are emitted"
+    )]
+    OverrideTypeUnsupported(String),
+    #[error(
+        "override `{0}` is used as an array length; \
+         array sizes computed from override-expressions are not supported"
+    )]
+    OverrideAsArrayLengthUnsupported(String),
+    #[error(
+        "override `{0}` is used in `@workgroup_size`; \
+         override-driven workgroup sizes are not supported"
+    )]
+    OverrideInWorkgroupSizeUnsupported(String),
     #[error(transparent)]
     ResolveArraySizeError(#[from] crate::proc::ResolveArraySizeError),
     #[error("module requires SPIRV-{0}.{1}, which isn't supported")]
@@ -986,6 +1001,9 @@ pub struct Writer {
     wrapped_functions: crate::FastHashMap<WrappedFunction, Word>,
     /// Indexed by const-expression handle indexes
     constant_ids: HandleVec<crate::Expression, Word>,
+    /// Indexed by override-handle indexes; populated when
+    /// [`Options::allow_unresolved_overrides`] is `true`.
+    override_ids: HandleVec<crate::Override, Word>,
     cached_constants: crate::FastHashMap<CachedConstant, Word>,
     global_variables: HandleVec<crate::GlobalVariable, GlobalVariable>,
     std140_compat_uniform_types: crate::FastHashMap<Handle<crate::Type>, Std140CompatTypeInfo>,
@@ -1020,6 +1038,9 @@ pub struct Writer {
     ///
     /// Currently this validation is unimplemented.
     mesh_shader_primitive_indices_clamp: bool,
+
+    /// Mirror of [`Options::allow_unresolved_overrides`].
+    allow_unresolved_overrides: bool,
 }
 
 bitflags::bitflags! {
@@ -1128,6 +1149,20 @@ pub struct Options<'a> {
     pub task_dispatch_limits: Option<TaskDispatchLimits>,
 
     pub mesh_shader_primitive_indices_clamp: bool,
+
+    /// When `true`, the writer emits `OpSpecConstant*` plus
+    /// `OpDecorate %id SpecId N` for every `crate::Override` declaration
+    /// reachable from emitted entry points, instead of returning
+    /// `Error::Override`. `process_overrides` need not be called.
+    ///
+    /// Restrictions still rejected even when `true`:
+    /// - An override used in `@workgroup_size` (Vulkan's `LocalSizeId`
+    ///   shape differs and is out of scope).
+    /// - An override used as an array length
+    ///   (`Error::OverrideAsArrayLengthUnsupported`).
+    ///
+    /// Default: `false` (preserves existing behavior).
+    pub allow_unresolved_overrides: bool,
 }
 
 impl Default for Options<'_> {
@@ -1152,6 +1187,7 @@ impl Default for Options<'_> {
             debug_info: None,
             task_dispatch_limits: None,
             mesh_shader_primitive_indices_clamp: true,
+            allow_unresolved_overrides: false,
         }
     }
 }

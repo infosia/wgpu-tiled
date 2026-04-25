@@ -472,6 +472,30 @@ impl super::Instruction {
         instruction
     }
 
+    pub(super) fn spec_constant_true(result_type_id: Word, id: Word) -> Self {
+        let mut instruction = Self::new(Op::SpecConstantTrue);
+        instruction.set_type(result_type_id);
+        instruction.set_result(id);
+        instruction
+    }
+
+    pub(super) fn spec_constant_false(result_type_id: Word, id: Word) -> Self {
+        let mut instruction = Self::new(Op::SpecConstantFalse);
+        instruction.set_type(result_type_id);
+        instruction.set_result(id);
+        instruction
+    }
+
+    pub(super) fn spec_constant(result_type_id: Word, id: Word, values: &[Word]) -> Self {
+        let mut instruction = Self::new(Op::SpecConstant);
+        instruction.set_type(result_type_id);
+        instruction.set_result(id);
+        for value in values {
+            instruction.add_operand(*value);
+        }
+        instruction
+    }
+
     //
     //  Memory Instructions
     //

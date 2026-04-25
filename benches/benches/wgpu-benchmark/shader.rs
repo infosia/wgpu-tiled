@@ -474,6 +474,7 @@ pub fn backends(ctx: BenchmarkContext) -> anyhow::Result<Vec<SubBenchResult>> {
                 zero_initialize_workgroup_memory: true,
                 use_framebuffer_fetch: false,
                 subpass_color_slots: Default::default(),
+                allow_unresolved_overrides: false,
             };
             for input in &inputs.inner {
                 if !input.options.targets.unwrap().contains(Targets::GLSL) {

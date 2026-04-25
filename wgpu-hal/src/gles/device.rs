@@ -1434,6 +1434,7 @@ impl crate::Device for super::Device {
                     .private_caps
                     .contains(PrivateCapabilities::SHADER_FRAMEBUFFER_FETCH),
                 subpass_color_slots: FastHashMap::default(),
+                allow_unresolved_overrides: false,
             },
         })
     }

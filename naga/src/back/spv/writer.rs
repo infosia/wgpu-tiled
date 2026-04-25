@@ -1,4 +1,4 @@
-use alloc::{format, string::String, vec, vec::Vec};
+use alloc::{format, string::{String, ToString}, vec, vec::Vec};
 
 use arrayvec::ArrayVec;
 use hashbrown::hash_map::Entry;
@@ -102,6 +102,7 @@ impl Writer {
             lookup_function_type: crate::FastHashMap::default(),
             wrapped_functions: crate::FastHashMap::default(),
             constant_ids: HandleVec::new(),
+            override_ids: HandleVec::new(),
             cached_constants: crate::FastHashMap::default(),
             global_variables: HandleVec::new(),
             std140_compat_uniform_types: crate::FastHashMap::default(),
@@ -117,6 +118,7 @@ impl Writer {
             debug_printf: None,
             task_dispatch_limits: options.task_dispatch_limits,
             mesh_shader_primitive_indices_clamp: options.mesh_shader_primitive_indices_clamp,
+            allow_unresolved_overrides: options.allow_unresolved_overrides,
         })
     }
 
@@ -137,6 +139,7 @@ impl Writer {
             super::f16_polyfill::F16IoPolyfill::new(options.use_storage_input_output_16);
         self.task_dispatch_limits = options.task_dispatch_limits;
         self.mesh_shader_primitive_indices_clamp = options.mesh_shader_primitive_indices_clamp;
+        self.allow_unresolved_overrides = options.allow_unresolved_overrides;
         Ok(())
     }
 
@@ -177,6 +180,7 @@ impl Writer {
             binding_map: take(&mut self.binding_map),
             task_dispatch_limits: self.task_dispatch_limits,
             mesh_shader_primitive_indices_clamp: self.mesh_shader_primitive_indices_clamp,
+            allow_unresolved_overrides: self.allow_unresolved_overrides,
 
             // Initialized afresh:
             id_gen,
@@ -197,6 +201,7 @@ impl Writer {
             lookup_function_type: take(&mut self.lookup_function_type).reclaim(),
             wrapped_functions: take(&mut self.wrapped_functions).reclaim(),
             constant_ids: take(&mut self.constant_ids).reclaim(),
+            override_ids: take(&mut self.override_ids).reclaim(),
             cached_constants: take(&mut self.cached_constants).reclaim(),
             global_variables: take(&mut self.global_variables).reclaim(),
             std140_compat_uniform_types: take(&mut self.std140_compat_uniform_types).reclaim(),
@@ -2654,12 +2659,138 @@ impl Writer {
 
                 self.get_constant_composite(ty, component_ids)
             }
+            crate::Expression::Override(override_handle) => {
+                if !self.allow_unresolved_overrides {
+                    return Err(Error::Override);
+                }
+                self.override_ids[override_handle]
+            }
             _ => {
                 return Err(Error::Override);
             }
         };
 
         self.constant_ids[handle] = id;
+
+        Ok(id)
+    }
+
+    /// Reject the override-restriction cases that the SPIR-V backend cannot
+    /// represent natively (override-driven array length, override-driven
+    /// workgroup size). Called only when
+    /// [`Options::allow_unresolved_overrides`] is `true`; without that flag,
+    /// `Error::Override` already fires at the const-expression layer.
+    fn validate_override_restrictions(
+        &self,
+        ir_module: &crate::Module,
+    ) -> Result<(), Error> {
+        for (_, ty) in ir_module.types.iter() {
+            if let crate::TypeInner::Array {
+                size: crate::ArraySize::Pending(handle),
+                ..
+            } = ty.inner
+            {
+                let display_name = ir_module.overrides[handle]
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| String::from("<anonymous>"));
+                return Err(Error::OverrideAsArrayLengthUnsupported(display_name));
+            }
+        }
+        for entry in ir_module.entry_points.iter() {
+            if let Some(ref overrides) = entry.workgroup_size_overrides {
+                for slot in overrides.iter().flatten() {
+                    if let crate::Expression::Override(handle) =
+                        ir_module.global_expressions[*slot]
+                    {
+                        let display_name = ir_module.overrides[handle]
+                            .name
+                            .clone()
+                            .unwrap_or_else(|| String::from("<anonymous>"));
+                        return Err(Error::OverrideInWorkgroupSizeUnsupported(display_name));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Emit `OpSpecConstant*` plus `OpDecorate %id SpecId N` for an
+    /// unresolved [`crate::Override`].
+    ///
+    /// Only scalar `bool` / `i32` / `u32` / `f32` overrides are supported.
+    /// Default values are taken from `init` when it is a direct
+    /// [`crate::Expression::Literal`]; non-literal defaults fall back to
+    /// zero / false (Metal / Vulkan supply the runtime value either way).
+    fn write_spec_constant(
+        &mut self,
+        override_handle: Handle<crate::Override>,
+        ir_module: &crate::Module,
+    ) -> Result<Word, Error> {
+        let override_ = &ir_module.overrides[override_handle];
+        let display_name = override_.name.as_deref().unwrap_or("<anonymous>");
+        let scalar = match ir_module.types[override_.ty].inner {
+            crate::TypeInner::Scalar(scalar) => scalar,
+            _ => {
+                return Err(Error::OverrideTypeUnsupported(display_name.to_string()));
+            }
+        };
+        let type_id = self.get_handle_type_id(override_.ty);
+        let id = self.id_gen.next();
+
+        let init_literal = override_
+            .init
+            .and_then(|expr| match ir_module.global_expressions[expr] {
+                crate::Expression::Literal(lit) => Some(lit),
+                _ => None,
+            });
+
+        let instruction = match scalar.kind {
+            crate::ScalarKind::Bool => {
+                let value = matches!(init_literal, Some(crate::Literal::Bool(true)));
+                if value {
+                    Instruction::spec_constant_true(type_id, id)
+                } else {
+                    Instruction::spec_constant_false(type_id, id)
+                }
+            }
+            crate::ScalarKind::Sint => {
+                let bits = match init_literal {
+                    Some(crate::Literal::I32(v)) => v as u32,
+                    _ => 0,
+                };
+                Instruction::spec_constant(type_id, id, &[bits])
+            }
+            crate::ScalarKind::Uint => {
+                let bits = match init_literal {
+                    Some(crate::Literal::U32(v)) => v,
+                    _ => 0,
+                };
+                Instruction::spec_constant(type_id, id, &[bits])
+            }
+            crate::ScalarKind::Float => {
+                let bits = match init_literal {
+                    Some(crate::Literal::F32(v)) => v.to_bits(),
+                    _ => 0,
+                };
+                Instruction::spec_constant(type_id, id, &[bits])
+            }
+            crate::ScalarKind::AbstractInt | crate::ScalarKind::AbstractFloat => {
+                return Err(Error::OverrideTypeUnsupported(display_name.to_string()));
+            }
+        };
+        instruction.to_words(&mut self.logical_layout.declarations);
+
+        let spec_id = override_
+            .id
+            .ok_or(Error::Validation("override missing implicit @id assignment"))?;
+        self.decorate(id, spirv::Decoration::SpecId, &[spec_id as u32]);
+
+        if self.flags.contains(WriterFlags::DEBUG) {
+            if let Some(ref name) = override_.name {
+                self.debugs.push(Instruction::name(id, name));
+            }
+        }
 
         Ok(id)
     }
@@ -3651,6 +3782,18 @@ impl Writer {
         for (_, var) in ir_module.global_variables.iter() {
             if var.space == crate::AddressSpace::Uniform {
                 self.write_std140_compat_type_declaration(ir_module, var.ty)?;
+            }
+        }
+
+        // emit `OpSpecConstant*` for every override when the opt-in flag is set,
+        // so `Expression::Override(_)` references in the const-expression loop
+        // below resolve to the corresponding `<id>`.
+        self.override_ids.resize(ir_module.overrides.len(), 0);
+        if self.allow_unresolved_overrides {
+            self.validate_override_restrictions(ir_module)?;
+            for (handle, _) in ir_module.overrides.iter() {
+                let id = self.write_spec_constant(handle, ir_module)?;
+                self.override_ids[handle] = id;
             }
         }
 

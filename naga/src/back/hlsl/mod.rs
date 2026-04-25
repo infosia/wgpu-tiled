@@ -546,6 +546,15 @@ pub struct Options {
     /// if set, ray queries will get a variable to track their state to prevent
     /// misuse.
     pub ray_query_initialization_tracking: bool,
+
+    /// Mirrors the SPIR-V / MSL flag for surface consistency. DX12 has no
+    /// first-class equivalent of Vulkan-style specialization constants, so
+    /// the HLSL backend always returns
+    /// `Error::SpecializationConstantsUnsupported` for unresolved overrides
+    /// regardless of this flag.
+    ///
+    /// Default: `false`.
+    pub allow_unresolved_overrides: bool,
 }
 
 impl Default for Options {
@@ -564,6 +573,7 @@ impl Default for Options {
             restrict_indexing: true,
             force_loop_bounding: true,
             ray_query_initialization_tracking: true,
+            allow_unresolved_overrides: false,
         }
     }
 }
@@ -650,6 +660,12 @@ pub enum Error {
     Custom(String),
     #[error("overrides should not be present at this stage")]
     Override,
+    #[error(
+        "HLSL has no equivalent of Vulkan-style specialization constants; \
+         resolve overrides via `process_overrides` before invoking the HLSL \
+         backend"
+    )]
+    SpecializationConstantsUnsupported,
     #[error(transparent)]
     ResolveArraySizeError(#[from] proc::ResolveArraySizeError),
     #[error("entry point with stage {0:?} and name '{1}' not found")]

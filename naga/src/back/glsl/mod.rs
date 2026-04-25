@@ -343,6 +343,18 @@ pub struct Options {
     pub use_framebuffer_fetch: bool,
     /// Mapping from `(group, binding)` to render-pass color slot for subpass inputs.
     pub subpass_color_slots: crate::FastHashMap<(u32, u32), u32>,
+
+    /// When `true`, the writer emits `layout(constant_id = N) const T <name> = <default>;`
+    /// for every `crate::Override` declaration reachable from emitted entry
+    /// points, instead of returning `Error::Override`.
+    ///
+    /// Mirrors the SPIR-V / MSL flag for surface consistency. Drivers may
+    /// place constraints on `layout(constant_id = …)` placement; emit early
+    /// in the prologue. See the SPIR-V backend's documentation for the full
+    /// restriction list.
+    ///
+    /// Default: `false` (preserves existing behavior).
+    pub allow_unresolved_overrides: bool,
 }
 
 impl Default for Options {
@@ -354,6 +366,7 @@ impl Default for Options {
             zero_initialize_workgroup_memory: true,
             use_framebuffer_fetch: false,
             subpass_color_slots: crate::FastHashMap::default(),
+            allow_unresolved_overrides: false,
         }
     }
 }

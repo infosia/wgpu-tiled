@@ -368,6 +368,7 @@ impl super::Device {
                     subpass_color_slots: subpass_color_slots.clone(),
                     zero_initialize_workgroup_memory: stage.zero_initialize_workgroup_memory,
                     force_loop_bounding: stage.module.bounds_checks.force_loop_bounding,
+                    allow_unresolved_overrides: false,
                 };
 
                 let pipeline_options = naga::back::msl::PipelineOptions {

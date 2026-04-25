@@ -65,9 +65,43 @@ impl Frontend {
     fn inner<'a>(&mut self, source: &'a str) -> Result<'a, crate::Module> {
         let tu = self.parser.parse(source, &self.options)?;
         let index = index::Index::generate(&tu)?;
-        let module = Lowerer::new(&index).lower(tu)?;
+        let mut module = Lowerer::new(&index).lower(tu)?;
+        assign_implicit_override_ids(&mut module);
 
         Ok(module)
+    }
+}
+
+/// Fill in `Override::id` for every override declared without an explicit
+/// `@id(N)` attribute, using the smallest unused `u16` in declaration order.
+///
+/// **Why parse-time, not emit-time:** the SPIR-V and MSL backends emit
+/// independently from the same `Module`. If each backend allocated its own
+/// implicit IDs, the SpecId / `function_constant` slot for a given override
+/// would disagree across backends and break runtime specialization.
+fn assign_implicit_override_ids(module: &mut crate::Module) {
+    use alloc::collections::BTreeSet;
+
+    let mut used: BTreeSet<u16> = module
+        .overrides
+        .iter()
+        .filter_map(|(_, ov)| ov.id)
+        .collect();
+
+    let mut next: u32 = 0;
+    for (_, ov) in module.overrides.iter_mut() {
+        if ov.id.is_none() {
+            while next <= u16::MAX as u32 && used.contains(&(next as u16)) {
+                next += 1;
+            }
+            if next > u16::MAX as u32 {
+                return;
+            }
+            let id = next as u16;
+            ov.id = Some(id);
+            used.insert(id);
+            next += 1;
+        }
     }
 }
 

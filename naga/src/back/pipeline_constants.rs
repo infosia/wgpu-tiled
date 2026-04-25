@@ -75,14 +75,14 @@ pub fn process_overrides<'a>(
         .map(|(handle, _)| handle)
         .collect::<Vec<_>>();
     for c in pipeline_constants.keys() {
+        // Pipeline-constant keys may name an override by either its
+        // numeric `@id(N)` or its identifier — match either, so callers
+        // continue to work after the WGSL frontend started populating
+        // `Override::id` for every override at parse time.
         let c_id = c.parse().ok();
         if let Some((i, _)) = handles.iter().enumerate().find(|&(_, handle)| {
             let o = &module.overrides[*handle];
-            if o.id.is_some() {
-                o.id == c_id
-            } else {
-                o.name.as_deref() == Some(c.as_str())
-            }
+            o.id == c_id || o.name.as_deref() == Some(c.as_str())
         }) {
             handles.swap_remove(i);
         } else {
@@ -362,19 +362,30 @@ fn process_override(
     adjusted_constant_initializers: &mut HashSet<Handle<Constant>>,
     global_expression_kind_tracker: &mut crate::proc::ExpressionKindTracker,
 ) -> Result<Handle<Constant>, PipelineConstantError> {
-    // Determine which key to use for `r#override` in `pipeline_constants`.
-    let key = if let Some(id) = r#override.id {
-        Cow::Owned(id.to_string())
-    } else if let Some(ref name) = r#override.name {
-        Cow::Borrowed(name)
-    } else {
-        unreachable!();
+    // Determine the lookup key(s). Prefer the explicit/assigned `@id(N)` so
+    // ID-keyed callers match when the override has one; fall back to the
+    // name when the ID lookup misses, so name-keyed callers continue to
+    // work after the WGSL frontend started assigning implicit IDs at parse
+    // time.
+    let id_key = r#override.id.map(|id| id.to_string());
+    let name_key = r#override.name.as_deref();
+    let lookup_value = id_key
+        .as_deref()
+        .and_then(|k| pipeline_constants.get::<str>(k))
+        .or_else(|| name_key.and_then(|n| pipeline_constants.get::<str>(n)));
+    // Use the human-readable name in error messages when available so
+    // name-keyed callers get the message they expect; fall back to the ID
+    // string for nameless overrides (which can only be referenced by ID).
+    let key: Cow<'_, str> = match (name_key, id_key.as_deref()) {
+        (Some(name), _) => Cow::Borrowed(name),
+        (None, Some(id)) => Cow::Owned(id.to_string()),
+        (None, None) => unreachable!(),
     };
 
     // Generate a global expression for `r#override`'s value, either
     // from the provided `pipeline_constants` table or its initializer
     // in the module.
-    let init = if let Some(value) = pipeline_constants.get::<str>(&key) {
+    let init = if let Some(value) = lookup_value {
         let literal = match module.types[r#override.ty].inner {
             TypeInner::Scalar(scalar) => map_value_to_literal(*value, scalar)?,
             _ => unreachable!(),

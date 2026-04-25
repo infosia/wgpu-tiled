@@ -233,6 +233,21 @@ pub enum Error {
     UnsupportedCooperativeMatrix,
     #[error("overrides should not be present at this stage")]
     Override,
+    #[error(
+        "override `{0}` has an unsupported type for native specialization \
+         constants; only scalar bool/i32/u32/f32 are emitted"
+    )]
+    OverrideTypeUnsupported(String),
+    #[error(
+        "override `{0}` is used as an array length; \
+         array sizes computed from override-expressions are not supported"
+    )]
+    OverrideAsArrayLengthUnsupported(String),
+    #[error(
+        "override `{0}` is used in `@workgroup_size`; \
+         override-driven workgroup sizes are not supported"
+    )]
+    OverrideInWorkgroupSizeUnsupported(String),
     #[error("bitcasting to {0:?} is not supported")]
     UnsupportedBitCast(crate::TypeInner),
     #[error(transparent)]
@@ -305,6 +320,23 @@ pub struct Options {
     /// If set, loops will have code injected into them, forcing the compiler
     /// to think the number of iterations is bounded.
     pub force_loop_bounding: bool,
+
+    /// When `true`, the writer emits `constant T <name> [[function_constant(N)]];`
+    /// for every `crate::Override` declaration reachable from emitted entry
+    /// points, instead of returning `Error::Override`. `process_overrides`
+    /// need not be called.
+    ///
+    /// Default values are **not** emitted; Metal supplies them at pipeline
+    /// creation via `MTLFunctionConstantValues`. If a constant is missing at
+    /// pipeline creation Metal raises a loader error.
+    ///
+    /// Restrictions still rejected even when `true`:
+    /// - An override used in `@workgroup_size`.
+    /// - An override used as an array length
+    ///   (`Error::OverrideAsArrayLengthUnsupported`).
+    ///
+    /// Default: `false` (preserves existing behavior).
+    pub allow_unresolved_overrides: bool,
 }
 
 impl Default for Options {
@@ -319,6 +351,7 @@ impl Default for Options {
             subpass_color_slots: crate::FastHashMap::default(),
             zero_initialize_workgroup_memory: true,
             force_loop_bounding: true,
+            allow_unresolved_overrides: false,
         }
     }
 }
