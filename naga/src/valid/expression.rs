@@ -81,7 +81,10 @@ pub enum ExpressionError {
     ExpectedSamplerType(Handle<crate::Type>),
     #[error("Unable to operate on image class {0:?}")]
     InvalidImageClass(crate::ImageClass),
-    #[error("Operation {op} is not supported for subpass input image class {class:?}")]
+    #[error(
+        "Operation {op} is not supported for subpass input image class {class:?}.{}",
+        subpass_op_hint(op)
+    )]
     InvalidSubpassOp {
         op: &'static str,
         class: crate::ImageClass,
@@ -161,6 +164,17 @@ pub enum ExpressionError {
         lhs_type: crate::TypeInner,
         rhs_expr: Handle<crate::Expression>,
     },
+}
+
+fn subpass_op_hint(op: &str) -> &'static str {
+    match op {
+        "ImageSample" => " For neighbor-fragment access, declare a separate sampled `texture_2d<T>` binding and use `textureSample`.",
+        "ImageQuery" => " Subpass inputs have no queryable size; use `@builtin(position)` for screen-space coordinates.",
+        "ImageLoad" => " Use `subpassLoad(x)` instead. Subpass inputs read the current fragment's position only.",
+        "ImageStore" => " Subpass inputs are read-only.",
+        "ImageAtomic" => " Subpass inputs are read-only; atomics require a storage texture.",
+        _ => "",
+    }
 }
 
 #[derive(Clone, Debug, thiserror::Error)]

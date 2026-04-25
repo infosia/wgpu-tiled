@@ -848,23 +848,43 @@ GPU render time is ~12% higher with subpass mode. This is expected — Vulkan su
 
 5. ~~**Depth/stencil aspect split is not modeled**~~ — **Fixed.** `ImageClass::SubpassInputStencil { multi }` plus the WGSL `subpass_input_stencil` / `subpass_input_stencil_multisampled` types are supported. Stencil subpass inputs lower to `usubpassInput` in GLSL and to a `u32` `SampledType` in SPIR-V. `subpassLoad` on a stencil subpass input returns `u32`.
 
-### Remaining
+12. ~~**Tile-memory lifetime is not spelled out in the shader contract**~~ — **Documented.** The lifetime and scope contract is now spelled out on `ImageClass::SubpassInput` and `Expression::SubpassLoad` doc-comments and in the [Subpass Input Shader Contract](#subpass-input-shader-contract) section below. The contract covers: pass-local validity, position-implicit reads, fragment-stage-only, and tile-memory backing when the source uses `TextureUsages::TRANSIENT`.
 
-6. **Public transient attachment handles** — `wgpu-core` and HAL expose `create_transient_attachment`, but the public `wgpu::Device` API still does not surface transient attachment objects. Current public usage relies on `TextureUsages::TRANSIENT` and the render-graph/subpass APIs.
+13. ~~**Diagnostic quality for residual subpass-input misuse**~~ — **Improved.** `InvalidSubpassOp` now appends an actionable hint per operation (`ImageSample` → "use a separate sampled `texture_2d<T>`", `ImageQuery` → "use `@builtin(position)` for screen-space coordinates", `ImageStore`/`ImageAtomic` → "subpass inputs are read-only", `ImageLoad` → "use `subpassLoad(x)` instead"). Most direct misuse is already a WGSL type error at parse time; this covers the residual indirect cases (pointer aliasing, generic overload paths).
+
+### Out of Scope (decisions not to pursue)
+
+6. **Public transient attachment handles** — Decision: not pursuing. `TextureUsages::TRANSIENT` plus the `RenderGraphBuilder` and subpass APIs cover every observed use case. A public `wgpu::TransientAttachment` handle would not unlock new functionality: transient lifetime is render-pass-local by definition, tile-memory hints are already exposed via `TransientMemoryHint`, and there is nothing to amortize through pre-creation. Re-open if a concrete user need surfaces.
+
+9. **No access to individual MSAA samples** — Vulkan's `subpassLoad(input, sample_index)` can read an arbitrary sample. Metal's `[[color(N)]]` framebuffer-fetch gives you the current sample only. The WGSL surface restricts to the Metal-expressible subset (current sample), which is the portable choice but blocks some MSAA deferred-shading techniques (edge-aware tone mapping, per-sample coverage weighting). A future Vulkan-only extension could unblock this, but would have no Metal path without falling back to a resolve texture — breaking the tile-memory contract. Decision: permanently out of scope unless a cross-backend story emerges.
+
+### Remaining
 
 7. **DX12 subpass emulation** — Currently all stubs. Would need end-render-pass / begin-new-pass / bind-intermediates-as-SRVs approach.
 
 8. **MSAA subpass inputs — sample-frequency execution is not enforced** — The planned MSAA semantics say `subpassLoad(x)` on a multisampled input reads the *current sample only*. Under Vulkan this requires `sampleShadingEnable`; under Metal it requires the fragment function to reference `[[sample_id]]`. If the user writes an MSAA subpass-input shader that does not reference `@builtin(sample_index)`, the load silently returns sample 0 on some backends and a per-pixel average on others. No validator in naga or wgpu-core currently checks this. Until there is a rule (e.g. "MSAA subpass-input fragment shaders must declare `@builtin(sample_index)` as an input, even if unused"), MSAA subpass support is a foot-gun and should stay gated behind a capability flag. The validator currently rejects `subpass_input_multisampled*` outright as a placeholder until this question is answered.
 
-9. **No access to individual MSAA samples** — Vulkan's `subpassLoad(input, sample_index)` can read an arbitrary sample. Metal's `[[color(N)]]` framebuffer-fetch gives you the current sample only. The WGSL surface restricts to the Metal-expressible subset (current sample), which is the portable choice but blocks some MSAA deferred-shading techniques (edge-aware tone mapping, per-sample coverage weighting). A future Vulkan-only extension could unblock this, but would have no Metal path without falling back to a resolve texture — breaking the tile-memory contract. Decision: permanently out of scope unless a cross-backend story emerges.
-
 10. **Layered / multiview subpass inputs** — Current IR assumes `Arrayed: false` for subpass inputs. Multiview rendering (XR, stereo) uses layered attachments where each view index maps to a layer. Combining multiview with subpass inputs needs an implicit layer resolve via the current view index. Not supported today; would require an IR extension when multiview becomes a requirement.
 
 11. **HLSL backend has no subpass-input path** — HLSL / DX12 has no direct equivalent of Vulkan input attachments or Metal framebuffer fetch. ROV (Rasterizer Ordered Views) has read-write semantics that don't match `subpassLoad`. The HLSL backend returns a hard compile-time error (`"subpass inputs are not supported by the HLSL backend"`) when a `SubpassLoad` expression is emitted. Adding real DX12 support would require rethinking the render-pass model on that backend, not just shader-emission changes.
 
-12. **Tile-memory lifetime is not spelled out in the shader contract** — Whether a subpass input is valid after its producing subpass ends (i.e. whether it is backed by tile memory or DRAM) is currently implicit in `TextureUsages::TRANSIENT` and backend store-op choices. There is no user-visible statement in the shader-level docs that says "a subpass input is readable only during the current render pass, and only for the current fragment". Users coming from a texture-sampling background will trip over this. The shader-surface docs should state the lifetime and scope contract alongside the `subpassLoad` builtin.
+---
 
-13. **Diagnostic quality for residual subpass-input misuse** — Most direct misuse is now a WGSL type error at parse time, since `textureSample` / `textureLoad` / `textureDimensions` are not defined on `subpass_input*` types. A small residual class of indirect misuse (e.g. pointer aliasing, or forcing a subpass input through a generic overload) still reaches the validator as `InvalidSubpassOp { op, class }`; those error messages name the offending operation but do not point at the right alternative (`@builtin(position)` for screen-space coordinates, a separate bind group + sampled texture for neighbor access). Upgrading the remaining messages with actionable hints would close this gap.
+## Subpass Input Shader Contract
+
+The `subpass_input<T>`, `subpass_input_depth`, and `subpass_input_stencil` WGSL types (and their `_multisampled` variants) read tile-memory data written by an earlier subpass within the same render pass. Four invariants always hold:
+
+1. **Pass-local validity.** A subpass input binding is valid only while the render pass that produced it is active. Reading the same shader binding outside that pass is undefined.
+
+2. **Position-implicit access.** Each fragment invocation reads only its own framebuffer position. There is no `(x, y)` argument; the backend ignores any coordinate. Neighbor-fragment access is not possible — declare a separate sampled `texture_2d<T>` binding if you need it.
+
+3. **Fragment-stage only.** `subpassLoad` is callable only from a fragment entry point. The validator rejects subpass-input globals reachable from vertex or compute stages.
+
+4. **Tile-memory backing when transient.** When the producing attachment uses `TextureUsages::TRANSIENT`, the read happens entirely in on-chip tile memory (Metal `MTLStorageModeMemoryless`, Vulkan `VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT` + `LAZILY_ALLOCATED`). Without `TRANSIENT`, the read still works but goes through framebuffer memory (no DRAM-bandwidth saving).
+
+`subpassLoad(x)` is the only operation defined on `subpass_input*` types. `textureSample`, `textureLoad`, `textureDimensions`, `textureNumLevels`, `textureNumSamples`, `textureGather*`, image stores, and image atomics are type errors at parse time.
+
+Return types: `subpassLoad(subpass_input<T>) -> vec4<T>`, `subpassLoad(subpass_input_depth) -> f32`, `subpassLoad(subpass_input_stencil) -> u32`.
 
 ---
 

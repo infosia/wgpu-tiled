@@ -5297,3 +5297,56 @@ fn subpass_load_fragment_only() {
         })
     }
 }
+
+#[test]
+fn subpass_input_diagnostics_carry_actionable_hints() {
+    // textureSample on a subpass input should suggest a separate sampled texture.
+    let source = r#"
+        @group(0) @binding(0)
+        var gbuffer: subpass_input<f32>;
+
+        @group(0) @binding(1)
+        var samp: sampler;
+
+        @fragment
+        fn main() -> @location(0) vec4<f32> {
+            return textureSample(gbuffer, samp, vec2<f32>(0.5, 0.5));
+        }
+    "#;
+    let module = naga::front::wgsl::parse_str(source).expect("source must parse");
+    let err = naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::all(),
+    )
+    .validate(&module)
+    .expect_err("module must fail validation");
+    let text = err.emit_to_string(source);
+    assert!(
+        text.contains("declare a separate sampled `texture_2d<T>` binding"),
+        "expected ImageSample hint in:\n{text}"
+    );
+
+    // textureDimensions on a subpass input should suggest @builtin(position).
+    let source = r#"
+        @group(0) @binding(0)
+        var gbuffer: subpass_input<f32>;
+
+        @fragment
+        fn main() -> @location(0) vec4<f32> {
+            _ = textureDimensions(gbuffer);
+            return vec4<f32>(0.0);
+        }
+    "#;
+    let module = naga::front::wgsl::parse_str(source).expect("source must parse");
+    let err = naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::all(),
+    )
+    .validate(&module)
+    .expect_err("module must fail validation");
+    let text = err.emit_to_string(source);
+    assert!(
+        text.contains("`@builtin(position)`"),
+        "expected ImageQuery hint in:\n{text}"
+    );
+}

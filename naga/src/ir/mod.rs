@@ -833,18 +833,40 @@ pub enum ImageClass {
     /// External texture.
     External,
     /// Color subpass input (input attachment).
+    ///
+    /// Subpass inputs are tile-memory reads of an attachment written by an
+    /// earlier subpass within the same render pass. Lifetime and scope:
+    ///
+    /// - **Pass-local**: a subpass input is readable only while its render
+    ///   pass is active. Outside the pass the binding is undefined.
+    /// - **Position-implicit**: each invocation reads the current fragment's
+    ///   position only; arbitrary `(x, y)` lookups are not supported.
+    /// - **Fragment-stage only**: subpass loads are valid only from a
+    ///   fragment entry point.
+    /// - **Tile-memory backed when transient**: when the source attachment
+    ///   uses `TextureUsages::TRANSIENT` the read happens on-chip without
+    ///   ever touching DRAM. Otherwise the read still hits framebuffer
+    ///   memory.
+    ///
+    /// The only valid operation is [`Expression::SubpassLoad`].
     SubpassInput {
         /// Kind of values to load.
         kind: ScalarKind,
         /// Multi-sampled image.
         multi: bool,
     },
-    /// Depth subpass input (input attachment).
+    /// Depth subpass input (input attachment). See [`SubpassInput`] for the
+    /// lifetime and scope contract.
+    ///
+    /// [`SubpassInput`]: ImageClass::SubpassInput
     SubpassInputDepth {
         /// Multi-sampled depth image.
         multi: bool,
     },
-    /// Stencil subpass input (input attachment).
+    /// Stencil subpass input (input attachment). See [`SubpassInput`] for
+    /// the lifetime and scope contract.
+    ///
+    /// [`SubpassInput`]: ImageClass::SubpassInput
     SubpassInputStencil {
         /// Multi-sampled stencil image.
         multi: bool,
@@ -1836,8 +1858,12 @@ pub enum Expression {
 
     /// Load from a subpass input image at the current fragment position.
     ///
-    /// This operation is valid only for [`ImageClass::SubpassInput`] and
-    /// [`ImageClass::SubpassInputDepth`] images.
+    /// This operation is valid only for [`ImageClass::SubpassInput`],
+    /// [`ImageClass::SubpassInputDepth`], and [`ImageClass::SubpassInputStencil`]
+    /// images, and only from a fragment entry point. The read is implicitly
+    /// at the current fragment position; the image binding is valid only
+    /// while its render pass is active. See [`ImageClass::SubpassInput`]
+    /// for the full lifetime and scope contract.
     SubpassLoad {
         /// The subpass input image to read from.
         image: Handle<Expression>,
