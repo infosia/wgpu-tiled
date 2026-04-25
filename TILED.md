@@ -706,6 +706,15 @@ Visual deferred shading with 3-subpass TBDR pipeline:
 - WGSL shaders: `gbuffer.wgsl`, `lighting.wgsl`, `composite.wgsl`
 - Uses `glam` for matrix math
 
+### `subpass_msaa` (visual)
+
+**Location:** `examples/features/src/subpass_msaa/`
+
+Minimal MSAA subpass-input reference:
+- 2-subpass MSAA graph (`gbuffer` -> `lighting`) using `subpass_input_multisampled<f32>` with `@builtin(sample_index)` in the lighting fragment entry point
+- A fullscreen composite pass resolves/averages the multisampled HDR output and tonemaps to swapchain
+- Exercises the resolved gap #8 runtime path on Metal/Vulkan
+
 ---
 
 ## Benchmark Results
