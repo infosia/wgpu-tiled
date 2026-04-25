@@ -1,4 +1,4 @@
-use alloc::vec::Vec;
+use alloc::{string::String, vec::Vec};
 
 use bit_set::BitSet;
 
@@ -197,8 +197,11 @@ pub enum EntryPointError {
     SubpassInputInInvalidStage(crate::ShaderStage),
     #[error("Subpass input variables used by one entry point must all be in one bind group, found groups {groups:?}")]
     SubpassInputsAcrossMultipleBindGroups { groups: Vec<u32> },
-    #[error("Multisampled subpass input types are not supported yet: {reason}")]
-    MsaaSubpassInputNotYetSupported { reason: &'static str },
+    #[error("fragment entry point '{entry_point}' reaches MSAA subpass-input image class {image_class:?} but does not declare @builtin(sample_index) as an input. Please declare a `@builtin(sample_index)` parameter on the entry point; the value need not be used, but declaring it is what triggers per-sample execution.")]
+    MsaaSubpassInputRequiresSampleIndex {
+        entry_point: String,
+        image_class: crate::ImageClass,
+    },
 }
 
 fn storage_usage(access: crate::StorageAccess) -> GlobalUse {
@@ -1456,8 +1459,11 @@ impl super::Validator {
             }
         }
 
+        let has_sample_index_argument = argument_built_ins.contains(&crate::BuiltIn::SampleIndex);
+
         self.ep_resource_bindings.clear();
         let mut subpass_input_groups = Vec::new();
+        let mut first_msaa_subpass_image_class = None;
         for (var_handle, var) in module.global_variables.iter() {
             let usage = info[var_handle];
             if usage.is_empty() {
@@ -1478,11 +1484,8 @@ impl super::Validator {
                     .with_span_handle(var_handle, &module.global_variables));
             }
             if let Some(class) = image_class.filter(|class| class.is_subpass_input()) {
-                if class.is_multisampled() {
-                    return Err(EntryPointError::MsaaSubpassInputNotYetSupported {
-                        reason: "sample-frequency semantics are not implemented yet",
-                    }
-                    .with_span_handle(var_handle, &module.global_variables));
+                if class.is_multisampled() && first_msaa_subpass_image_class.is_none() {
+                    first_msaa_subpass_image_class = Some(class);
                 }
                 if let Some(binding) = var.binding {
                     if !subpass_input_groups.contains(&binding.group) {
@@ -1573,6 +1576,15 @@ impl super::Validator {
                             .with_span_handle(var_handle, &module.global_variables));
                     }
                 }
+            }
+        }
+        if ep.stage == crate::ShaderStage::Fragment && !has_sample_index_argument {
+            if let Some(image_class) = first_msaa_subpass_image_class {
+                return Err(EntryPointError::MsaaSubpassInputRequiresSampleIndex {
+                    entry_point: ep.name.clone(),
+                    image_class,
+                }
+                .with_span());
             }
         }
         if subpass_input_groups.len() > 1 {

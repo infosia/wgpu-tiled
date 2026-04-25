@@ -2220,6 +2220,7 @@ impl crate::Device for super::Device {
         };
         let mut compatible_subpass_index = 0;
         let mut pipeline_input_attachments: Vec<super::PipelineInputAttachmentBinding> = Vec::new();
+        let mut fragment_uses_msaa_subpass_inputs = false;
         let mut fragment_binding_map = desc.layout.binding_map.clone();
         if let Some(subpass_target) = subpass_target {
             compatible_subpass_index = subpass_target.index;
@@ -2238,20 +2239,48 @@ impl crate::Device for super::Device {
                     super::ShaderModule::Intermediate {
                         ref naga_shader, ..
                     } => {
-                        for (_, global) in naga_shader.module.global_variables.iter() {
+                        let Some(entry_point_index) =
+                            naga_shader.module.entry_points.iter().position(|ep| {
+                                ep.stage == naga::ShaderStage::Fragment
+                                    && ep.name == stage.entry_point
+                            })
+                        else {
+                            return Err(crate::PipelineError::Linkage(
+                                wgt::ShaderStages::FRAGMENT,
+                                format!(
+                                    "could not find fragment entry point '{}' in naga shader module",
+                                    stage.entry_point
+                                ),
+                            ));
+                        };
+                        let entry_point_info = naga_shader.info.get_entry_point(entry_point_index);
+                        for (var_handle, global) in naga_shader.module.global_variables.iter() {
+                            if entry_point_info[var_handle].is_empty() {
+                                continue;
+                            }
                             let Some(binding) = global.binding.as_ref() else {
                                 continue;
                             };
                             let class = match naga_shader.module.types[global.ty].inner {
-                                naga::TypeInner::Image { class, .. }
-                                    if class.is_subpass_input() =>
-                                {
-                                    class
+                                naga::TypeInner::Image { class, .. } => class,
+                                naga::TypeInner::BindingArray { base, .. } => {
+                                    match naga_shader.module.types[base].inner {
+                                        naga::TypeInner::Image { class, .. } => class,
+                                        _ => {
+                                            continue;
+                                        }
+                                    }
                                 }
                                 _ => {
                                     continue;
                                 }
                             };
+                            if !class.is_subpass_input() {
+                                continue;
+                            }
+                            if class.is_multisampled() {
+                                fragment_uses_msaa_subpass_inputs = true;
+                            }
                             let input_attachment_binding = binding.binding;
                             if input_attachment_binding >= self.shared.max_input_attachments {
                                 return Err(crate::PipelineError::Linkage(
@@ -2494,6 +2523,13 @@ impl crate::Device for super::Device {
             .rasterization_samples(vk::SampleCountFlags::from_raw(desc.multisample.count))
             .alpha_to_coverage_enable(desc.multisample.alpha_to_coverage_enabled)
             .sample_mask(&vk_sample_mask);
+        let vk_multisample = if fragment_uses_msaa_subpass_inputs {
+            vk_multisample
+                .sample_shading_enable(true)
+                .min_sample_shading(1.0)
+        } else {
+            vk_multisample
+        };
 
         let blend_attachment_count = if let Some(subpass_target) = subpass_target {
             let Some(current_subpass_desc) = subpass_target

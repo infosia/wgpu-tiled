@@ -596,6 +596,8 @@ pub enum Error {
     /// [`crate::Sampling::First`] is unsupported.
     #[error("`{:?}` sampling is unsupported", crate::Sampling::First)]
     FirstSamplingNotSupported,
+    #[error("MSAA subpass inputs are not supported by the GLSL backend (GLES is out of scope for this fork)")]
+    MsaaSubpassInputUnsupported,
     #[error(transparent)]
     ResolveArraySizeError(#[from] proc::ResolveArraySizeError),
 }

@@ -1482,17 +1482,12 @@ impl<W: Write> Writer<W> {
             _ => return Err(Error::GenericValidation("subpass load image type".into())),
         };
         match class {
-            crate::ImageClass::SubpassInput { multi: false, .. }
-            | crate::ImageClass::SubpassInputDepth { multi: false }
-            | crate::ImageClass::SubpassInputStencil { multi: false } => {
+            crate::ImageClass::SubpassInput { .. }
+            | crate::ImageClass::SubpassInputDepth { .. }
+            | crate::ImageClass::SubpassInputStencil { .. } => {
                 self.put_expression(image, context, false)?;
                 Ok(())
             }
-            crate::ImageClass::SubpassInput { .. }
-            | crate::ImageClass::SubpassInputDepth { .. }
-            | crate::ImageClass::SubpassInputStencil { .. } => Err(Error::GenericValidation(
-                "multisampled subpass inputs are unsupported".into(),
-            )),
             _ => Err(Error::GenericValidation(
                 "non-subpass image used with SubpassLoad".into(),
             )),

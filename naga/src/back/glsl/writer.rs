@@ -629,6 +629,9 @@ impl<'a, W: Write> Writer<'a, W> {
                 write!(self.out, "{prefix}vec4")?;
                 Ok(())
             }
+            class if class.is_subpass_input() && class.is_multisampled() => {
+                Err(Error::MsaaSubpassInputUnsupported)
+            }
             _ => Err(Error::Custom(
                 "Framebuffer fetch globals must be non-multisampled subpass input images"
                     .to_string(),
@@ -648,30 +651,23 @@ impl<'a, W: Write> Writer<'a, W> {
     ) -> BackendResult {
         if class.is_subpass_input() {
             return match class {
-                crate::ImageClass::SubpassInput { kind, multi } => {
+                crate::ImageClass::SubpassInput { kind, multi: false } => {
                     let prefix = glsl_scalar(crate::Scalar { kind, width: 4 })?.prefix;
-                    if multi {
-                        write!(self.out, "{prefix}subpassInputMS")?;
-                    } else {
-                        write!(self.out, "{prefix}subpassInput")?;
-                    }
+                    write!(self.out, "{prefix}subpassInput")?;
                     Ok(())
                 }
-                crate::ImageClass::SubpassInputDepth { multi } => {
-                    if multi {
-                        write!(self.out, "subpassInputMS")?;
-                    } else {
-                        write!(self.out, "subpassInput")?;
-                    }
+                crate::ImageClass::SubpassInputDepth { multi: false } => {
+                    write!(self.out, "subpassInput")?;
                     Ok(())
                 }
-                crate::ImageClass::SubpassInputStencil { multi } => {
-                    if multi {
-                        write!(self.out, "usubpassInputMS")?;
-                    } else {
-                        write!(self.out, "usubpassInput")?;
-                    }
+                crate::ImageClass::SubpassInputStencil { multi: false } => {
+                    write!(self.out, "usubpassInput")?;
                     Ok(())
+                }
+                crate::ImageClass::SubpassInput { multi: true, .. }
+                | crate::ImageClass::SubpassInputDepth { multi: true }
+                | crate::ImageClass::SubpassInputStencil { multi: true } => {
+                    Err(Error::MsaaSubpassInputUnsupported)
                 }
                 crate::ImageClass::Storage { .. } | crate::ImageClass::External => Err(
                     Error::Custom("subpass input images must be sampled or depth".to_string()),
@@ -4458,9 +4454,7 @@ impl<'a, W: Write> Writer<'a, W> {
             crate::ImageClass::SubpassInput { .. }
             | crate::ImageClass::SubpassInputDepth { .. }
             | crate::ImageClass::SubpassInputStencil { .. } => {
-                return Err(Error::Custom(
-                    "multisampled subpass inputs are unsupported".to_string(),
-                ));
+                return Err(Error::MsaaSubpassInputUnsupported);
             }
             _ => {
                 return Err(Error::Custom(

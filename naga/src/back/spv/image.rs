@@ -835,7 +835,39 @@ impl BlockContext<'_> {
             })),
             &[zero, zero],
         );
-        let access_id = access.generate(&mut self.writer.id_gen, coordinates, None, None, block);
+
+        // OpImageRead on a multisampled image requires a Sample image operand.
+        // The validator guarantees the entry point declares
+        // `@builtin(sample_index)` whenever an MSAA subpass input is reachable;
+        // load that argument's value here and pass it through.
+        let sample_id = if image_class.is_multisampled() {
+            let arg_index = self
+                .ir_function
+                .arguments
+                .iter()
+                .position(|arg| {
+                    matches!(
+                        arg.binding,
+                        Some(crate::Binding::BuiltIn(crate::BuiltIn::SampleIndex))
+                    )
+                })
+                .ok_or(Error::Validation(
+                    "MSAA subpass input requires `@builtin(sample_index)` as a \
+                     top-level entry-point argument; declaring it on a struct \
+                     field is not yet supported by the SPIR-V backend",
+                ))?;
+            Some(self.function.parameter_id(arg_index as u32))
+        } else {
+            None
+        };
+
+        let access_id = access.generate(
+            &mut self.writer.id_gen,
+            coordinates,
+            None,
+            sample_id,
+            block,
+        );
 
         if result_type_id == access.result_type() {
             Ok(access_id)

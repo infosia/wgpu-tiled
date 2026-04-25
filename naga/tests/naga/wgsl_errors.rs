@@ -5299,6 +5299,65 @@ fn subpass_load_fragment_only() {
 }
 
 #[test]
+fn msaa_subpass_input_without_sample_index_rejected() {
+    check_validation! {
+        r#"
+            @group(0) @binding(0)
+            var gbuffer: subpass_input_multisampled<f32>;
+
+            @fragment
+            fn main() -> @location(0) vec4<f32> {
+                return subpassLoad(gbuffer);
+            }
+        "#:
+        Err(naga::valid::ValidationError::EntryPoint {
+            stage: naga::ShaderStage::Fragment,
+            source: naga::valid::EntryPointError::MsaaSubpassInputRequiresSampleIndex { .. },
+            ..
+        })
+    }
+}
+
+#[test]
+fn msaa_subpass_input_with_sample_index_accepted() {
+    no_validation_error(
+        r#"
+            @group(0) @binding(0)
+            var gbuffer: subpass_input_multisampled<f32>;
+
+            @fragment
+            fn main(@builtin(sample_index) _sid: u32) -> @location(0) vec4<f32> {
+                return subpassLoad(gbuffer);
+            }
+        "#,
+        Capabilities::all(),
+    );
+}
+
+#[test]
+fn msaa_subpass_input_diagnostic_includes_actionable_hint() {
+    let source = r#"
+        @group(0) @binding(0)
+        var gbuffer: subpass_input_multisampled<f32>;
+
+        @fragment
+        fn main() -> @location(0) vec4<f32> {
+            return subpassLoad(gbuffer);
+        }
+    "#;
+
+    let module = naga::front::wgsl::parse_str(source).expect("source must parse");
+    let err = naga::valid::Validator::new(naga::valid::ValidationFlags::all(), Capabilities::all())
+        .validate(&module)
+        .expect_err("module must fail validation");
+    let text = err.emit_to_string(source);
+    assert!(
+        text.contains("declare a `@builtin(sample_index)` parameter"),
+        "expected actionable sample_index hint in:\n{text}"
+    );
+}
+
+#[test]
 fn subpass_input_diagnostics_carry_actionable_hints() {
     // textureSample on a subpass input should suggest a separate sampled texture.
     let source = r#"
