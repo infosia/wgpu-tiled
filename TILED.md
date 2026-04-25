@@ -710,10 +710,11 @@ Visual deferred shading with 3-subpass TBDR pipeline:
 
 **Location:** `examples/features/src/subpass_msaa/`
 
-Minimal MSAA subpass-input reference:
-- 2-subpass MSAA graph (`gbuffer` -> `lighting`) using `subpass_input_multisampled<f32>` with `@builtin(sample_index)` in the lighting fragment entry point
-- A fullscreen composite pass resolves/averages the multisampled HDR output and tonemaps to swapchain
-- Exercises the resolved gap #8 runtime path on Metal/Vulkan
+MSAA line-list subpass-input reference (modeled on `msaa_line`):
+- Sunburst line geometry with left/right arrow-key toggle between 1x and adapter-max sample count
+- 2-subpass render graph: line rasterization pass then a pass-through subpass read (`subpass_input<f32>` at 1x, `subpass_input_multisampled<f32>` + `@builtin(sample_index)` at MSAA)
+- MSAA mode uses a follow-up fullscreen resolve pass to average multisample output into the swapchain
+- Exercises the resolved gap #8 runtime path on Metal/Vulkan with clearly visible edge antialiasing changes
 
 ---
 
