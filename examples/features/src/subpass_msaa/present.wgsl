@@ -1,4 +1,5 @@
-@group(0) @binding(0) var albedo_ms: subpass_input_multisampled<f32>;
+@group(0) @binding(0) var lines_input: subpass_input<f32>;
+@group(0) @binding(0) var lines_input_ms: subpass_input_multisampled<f32>;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -14,9 +15,11 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
 }
 
 @fragment
-fn fs_main(@builtin(sample_index) sid: u32) -> @location(0) vec4<f32> {
-    let albedo = subpassLoad(albedo_ms).rgb;
-    let shade = 0.85 + 0.15 * albedo.g;
-    let sample_bias = 1.0 - f32(sid) * 0.08;
-    return vec4<f32>(albedo * shade * sample_bias, 1.0);
+fn fs_main_1x() -> @location(0) vec4<f32> {
+    return subpassLoad(lines_input);
+}
+
+@fragment
+fn fs_main_msaa(@builtin(sample_index) _sid: u32) -> @location(0) vec4<f32> {
+    return subpassLoad(lines_input_ms);
 }

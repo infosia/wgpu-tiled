@@ -58,6 +58,7 @@ fn all_tests() -> Vec<wgpu_test::GpuTestInitializer> {
         mipmap::TEST,
         mipmap::TEST_QUERY,
         msaa_line::TEST,
+        subpass_msaa::TEST,
         multiple_render_targets::TEST,
         ray_cube_compute::TEST,
         ray_cube_fragment::TEST,

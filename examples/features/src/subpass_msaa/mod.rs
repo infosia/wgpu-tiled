@@ -1,233 +1,296 @@
-//! Minimal MSAA subpass-input example.
-//!
-//! Subpass 0 writes MSAA albedo + depth.
-//! Subpass 1 reads multisampled input attachments with `@builtin(sample_index)` and writes HDR.
-//! A follow-up pass resolves/tonemaps to the swapchain.
+//! MSAA line demo routed through typed subpass inputs.
 
 use bytemuck::{Pod, Zeroable};
-use glam::{Mat4, Vec3};
-use std::borrow::Cow;
 use wgpu::util::DeviceExt;
-
-const GRID_SIZE: u32 = 5;
-const INSTANCE_COUNT: u32 = GRID_SIZE * GRID_SIZE;
+use winit::{
+    event::{ElementState, KeyEvent, WindowEvent},
+    keyboard::{Key, NamedKey},
+};
 
 #[repr(C)]
-#[derive(Copy, Clone, Debug, Pod, Zeroable)]
+#[derive(Clone, Copy, Pod, Zeroable)]
 struct Vertex {
-    position: [f32; 3],
-    normal: [f32; 3],
-    color: [f32; 3],
+    _pos: [f32; 2],
+    _color: [f32; 4],
 }
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, Pod, Zeroable)]
-struct Uniforms {
-    view_proj: [[f32; 4]; 4],
+struct ActivePipelines {
+    render_graph: wgpu::RenderGraph,
+    gbuffer_pipeline: wgpu::RenderPipeline,
+    present_pipeline: wgpu::RenderPipeline,
+    present_bind_group: wgpu::BindGroup,
+    resolve_pipeline: Option<wgpu::RenderPipeline>,
+    resolve_bind_group: Option<wgpu::BindGroup>,
+    _lines_texture: wgpu::Texture,
+    lines_view: wgpu::TextureView,
+    _output_texture: Option<wgpu::Texture>,
+    output_view: Option<wgpu::TextureView>,
+    _fallback_texture: wgpu::Texture,
 }
 
-fn create_cube_vertices() -> (Vec<Vertex>, Vec<u16>) {
-    let positions: &[[f32; 3]] = &[
-        [-1.0, -1.0, 1.0],
-        [1.0, -1.0, 1.0],
-        [1.0, 1.0, 1.0],
-        [-1.0, 1.0, 1.0],
-        [-1.0, -1.0, -1.0],
-        [-1.0, 1.0, -1.0],
-        [1.0, 1.0, -1.0],
-        [1.0, -1.0, -1.0],
-        [-1.0, 1.0, -1.0],
-        [-1.0, 1.0, 1.0],
-        [1.0, 1.0, 1.0],
-        [1.0, 1.0, -1.0],
-        [-1.0, -1.0, -1.0],
-        [1.0, -1.0, -1.0],
-        [1.0, -1.0, 1.0],
-        [-1.0, -1.0, 1.0],
-        [1.0, -1.0, -1.0],
-        [1.0, 1.0, -1.0],
-        [1.0, 1.0, 1.0],
-        [1.0, -1.0, 1.0],
-        [-1.0, -1.0, -1.0],
-        [-1.0, -1.0, 1.0],
-        [-1.0, 1.0, 1.0],
-        [-1.0, 1.0, -1.0],
-    ];
-    let normals: &[[f32; 3]] = &[
-        [0.0, 0.0, 1.0],
-        [0.0, 0.0, 1.0],
-        [0.0, 0.0, 1.0],
-        [0.0, 0.0, 1.0],
-        [0.0, 0.0, -1.0],
-        [0.0, 0.0, -1.0],
-        [0.0, 0.0, -1.0],
-        [0.0, 0.0, -1.0],
-        [0.0, 1.0, 0.0],
-        [0.0, 1.0, 0.0],
-        [0.0, 1.0, 0.0],
-        [0.0, 1.0, 0.0],
-        [0.0, -1.0, 0.0],
-        [0.0, -1.0, 0.0],
-        [0.0, -1.0, 0.0],
-        [0.0, -1.0, 0.0],
-        [1.0, 0.0, 0.0],
-        [1.0, 0.0, 0.0],
-        [1.0, 0.0, 0.0],
-        [1.0, 0.0, 0.0],
-        [-1.0, 0.0, 0.0],
-        [-1.0, 0.0, 0.0],
-        [-1.0, 0.0, 0.0],
-        [-1.0, 0.0, 0.0],
-    ];
-    let face_colors: &[[f32; 3]] = &[
-        [1.0, 0.4, 0.3],
-        [0.3, 1.0, 0.4],
-        [0.3, 0.5, 1.0],
-        [1.0, 1.0, 0.3],
-        [1.0, 0.3, 1.0],
-        [0.3, 1.0, 1.0],
-    ];
-
-    let vertices: Vec<Vertex> = (0..24)
-        .map(|i| Vertex {
-            position: positions[i],
-            normal: normals[i],
-            color: face_colors[i / 4],
-        })
-        .collect();
-
-    let indices: Vec<u16> = (0..6u16)
-        .flat_map(|face| {
-            let base = face * 4;
-            [base, base + 1, base + 2, base, base + 2, base + 3]
-        })
-        .collect();
-
-    (vertices, indices)
+struct Example {
+    config: wgpu::SurfaceConfiguration,
+    gbuffer_shader: wgpu::ShaderModule,
+    present_shader: wgpu::ShaderModule,
+    resolve_shader: wgpu::ShaderModule,
+    vertex_buffer: wgpu::Buffer,
+    vertex_count: u32,
+    sample_count: u32,
+    max_sample_count: u32,
+    rebuild: bool,
+    active: ActivePipelines,
 }
 
-fn write_uniforms(queue: &wgpu::Queue, uniform_buf: &wgpu::Buffer, width: u32, height: u32) {
-    let aspect = width as f32 / height.max(1) as f32;
-    let eye = Vec3::new(14.0, 10.0, 14.0);
-    let view = Mat4::look_at_rh(eye, Vec3::ZERO, Vec3::Y);
-    let proj = Mat4::perspective_rh(std::f32::consts::FRAC_PI_4, aspect, 0.1, 100.0);
-    let view_proj = proj * view;
-    queue.write_buffer(
-        uniform_buf,
-        0,
-        bytemuck::cast_slice(&[Uniforms {
-            view_proj: view_proj.to_cols_array_2d(),
-        }]),
-    );
-}
-
-fn choose_msaa_sample_count(adapter: &wgpu::Adapter) -> Option<u32> {
-    let mut common = wgpu::TextureFormatFeatureFlags::MULTISAMPLE_X2
-        | wgpu::TextureFormatFeatureFlags::MULTISAMPLE_X4
-        | wgpu::TextureFormatFeatureFlags::MULTISAMPLE_X8
-        | wgpu::TextureFormatFeatureFlags::MULTISAMPLE_X16;
-    for format in [
-        wgpu::TextureFormat::Rgba8Unorm,
-        wgpu::TextureFormat::Rgba16Float,
-        wgpu::TextureFormat::Depth32Float,
-    ] {
-        common &= adapter.get_texture_format_features(format).flags;
+impl Example {
+    fn max_sample_count(adapter: &wgpu::Adapter, format: wgpu::TextureFormat) -> u32 {
+        let sample_flags = adapter.get_texture_format_features(format).flags;
+        if sample_flags.contains(wgpu::TextureFormatFeatureFlags::MULTISAMPLE_X16) {
+            16
+        } else if sample_flags.contains(wgpu::TextureFormatFeatureFlags::MULTISAMPLE_X8) {
+            8
+        } else if sample_flags.contains(wgpu::TextureFormatFeatureFlags::MULTISAMPLE_X4) {
+            4
+        } else if sample_flags.contains(wgpu::TextureFormatFeatureFlags::MULTISAMPLE_X2) {
+            2
+        } else {
+            1
+        }
     }
-    if common.contains(wgpu::TextureFormatFeatureFlags::MULTISAMPLE_X4) {
-        Some(4)
-    } else if common.contains(wgpu::TextureFormatFeatureFlags::MULTISAMPLE_X2) {
-        Some(2)
-    } else {
-        None
+
+    fn create_line_vertices() -> Vec<Vertex> {
+        let mut vertex_data = Vec::new();
+        let max = 50;
+        for i in 0..max {
+            let percent = i as f32 / max as f32;
+            let (sin, cos) = (percent * 2.0 * std::f32::consts::PI).sin_cos();
+            vertex_data.push(Vertex {
+                _pos: [0.0, 0.0],
+                _color: [1.0, -sin, cos, 1.0],
+            });
+            vertex_data.push(Vertex {
+                _pos: [cos, sin],
+                _color: [sin, -cos, 1.0, 1.0],
+            });
+        }
+        vertex_data
     }
-}
 
-struct FrameTextures {
-    _albedo: wgpu::Texture,
-    _lit_ms: wgpu::Texture,
-    _depth: wgpu::Texture,
-    albedo_view: wgpu::TextureView,
-    lit_ms_view: wgpu::TextureView,
-    depth_view: wgpu::TextureView,
-}
+    fn create_active_pipelines(
+        device: &wgpu::Device,
+        config: &wgpu::SurfaceConfiguration,
+        sample_count: u32,
+        gbuffer_shader: &wgpu::ShaderModule,
+        present_shader: &wgpu::ShaderModule,
+        resolve_shader: &wgpu::ShaderModule,
+    ) -> ActivePipelines {
+        let format = config.view_formats[0];
 
-impl FrameTextures {
-    fn new(device: &wgpu::Device, width: u32, height: u32, sample_count: u32) -> Self {
-        let transient_usage =
-            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TRANSIENT;
+        let mut graph_builder = wgpu::RenderGraphBuilder::new();
+        graph_builder.sample_count(sample_count);
+        let lines_attachment = graph_builder.add_transient_color("lines_color", format);
+        let output_attachment = graph_builder.add_transient_color("output", format);
+        graph_builder
+            .add_subpass("lines")
+            .writes_color(lines_attachment);
+        graph_builder
+            .add_subpass("present")
+            .reads(lines_attachment)
+            .writes_color(output_attachment);
+        let render_graph = graph_builder.build().unwrap();
+
+        let color_attachment_formats = [Some(format), Some(format)];
+
+        let gbuffer_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("subpass_msaa gbuffer_pipeline"),
+            layout: None,
+            vertex: wgpu::VertexState {
+                module: gbuffer_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: size_of::<Vertex>() as wgpu::BufferAddress,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x4],
+                }],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: gbuffer_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(format.into())],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::LineList,
+                front_face: wgpu::FrontFace::Ccw,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState {
+                count: sample_count,
+                ..Default::default()
+            },
+            multiview_mask: None,
+            cache: None,
+            subpass_target: Some(render_graph.make_subpass_target(
+                0,
+                &color_attachment_formats,
+                None,
+            )),
+        });
+
+        let present_entry_point = if sample_count == 1 {
+            "fs_main_1x"
+        } else {
+            "fs_main_msaa"
+        };
+        let present_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("subpass_msaa present_pipeline"),
+            layout: None,
+            vertex: wgpu::VertexState {
+                module: present_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: present_shader,
+                entry_point: Some(present_entry_point),
+                compilation_options: Default::default(),
+                targets: &[Some(format.into())],
+            }),
+            primitive: Default::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState {
+                count: sample_count,
+                ..Default::default()
+            },
+            multiview_mask: None,
+            cache: None,
+            subpass_target: Some(render_graph.make_subpass_target(
+                1,
+                &color_attachment_formats,
+                None,
+            )),
+        });
+
+        let fallback_usage = if sample_count == 1 {
+            wgpu::TextureUsages::TEXTURE_BINDING
+        } else {
+            wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT
+        };
+        let fallback_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("subpass_msaa fallback_input"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: fallback_usage,
+            view_formats: &[],
+        });
+        let fallback_view = fallback_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let present_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("subpass_msaa present_bind_group"),
+            layout: &present_pipeline.get_bind_group_layout(0),
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&fallback_view),
+            }],
+        });
+
         let extent = wgpu::Extent3d {
-            width,
-            height,
+            width: config.width,
+            height: config.height,
             depth_or_array_layers: 1,
         };
+        let lines_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("subpass_msaa lines_color"),
+            size: extent,
+            mip_level_count: 1,
+            sample_count,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TRANSIENT,
+            view_formats: &[],
+        });
+        let lines_view = lines_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        let albedo = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("subpass_msaa albedo"),
-            size: extent,
-            mip_level_count: 1,
-            sample_count,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: transient_usage,
-            view_formats: &[],
-        });
-        let lit_ms = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("subpass_msaa lit_ms"),
-            size: extent,
-            mip_level_count: 1,
-            sample_count,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba16Float,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
-        let depth = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("subpass_msaa depth"),
-            size: extent,
-            mip_level_count: 1,
-            sample_count,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Depth32Float,
-            usage: transient_usage,
-            view_formats: &[],
-        });
-        let albedo_view = albedo.create_view(&wgpu::TextureViewDescriptor::default());
-        let lit_ms_view = lit_ms.create_view(&wgpu::TextureViewDescriptor::default());
-        let depth_view = depth.create_view(&wgpu::TextureViewDescriptor::default());
+        let (output_texture, output_view, resolve_pipeline, resolve_bind_group) =
+            if sample_count == 1 {
+                (None, None, None, None)
+            } else {
+                let texture = device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("subpass_msaa output_msaa"),
+                    size: extent,
+                    mip_level_count: 1,
+                    sample_count,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                        | wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                });
+                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        Self {
-            _albedo: albedo,
-            _lit_ms: lit_ms,
-            _depth: depth,
-            albedo_view,
-            lit_ms_view,
-            depth_view,
+                let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some("subpass_msaa resolve_pipeline"),
+                    layout: None,
+                    vertex: wgpu::VertexState {
+                        module: resolve_shader,
+                        entry_point: Some("vs_main"),
+                        compilation_options: Default::default(),
+                        buffers: &[],
+                    },
+                    fragment: Some(wgpu::FragmentState {
+                        module: resolve_shader,
+                        entry_point: Some("fs_main"),
+                        compilation_options: Default::default(),
+                        targets: &[Some(format.into())],
+                    }),
+                    primitive: Default::default(),
+                    depth_stencil: None,
+                    multisample: Default::default(),
+                    multiview_mask: None,
+                    cache: None,
+                    subpass_target: None,
+                });
+                let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("subpass_msaa resolve_bind_group"),
+                    layout: &pipeline.get_bind_group_layout(0),
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&view),
+                    }],
+                });
+
+                (Some(texture), Some(view), Some(pipeline), Some(bind_group))
+            };
+
+        ActivePipelines {
+            render_graph,
+            gbuffer_pipeline,
+            present_pipeline,
+            present_bind_group,
+            resolve_pipeline,
+            resolve_bind_group,
+            _lines_texture: lines_texture,
+            lines_view,
+            _output_texture: output_texture,
+            output_view,
+            _fallback_texture: fallback_texture,
         }
     }
 }
 
-struct Renderer {
-    sample_count: u32,
-    gbuffer_pipeline: wgpu::RenderPipeline,
-    lighting_pipeline: wgpu::RenderPipeline,
-    composite_pipeline: wgpu::RenderPipeline,
-    vertex_buf: wgpu::Buffer,
-    index_buf: wgpu::Buffer,
-    index_count: u32,
-    uniform_buf: wgpu::Buffer,
-    uniform_bind_group: wgpu::BindGroup,
-    lighting_bind_group: wgpu::BindGroup,
-    composite_bind_group: wgpu::BindGroup,
-    composite_bgl: wgpu::BindGroupLayout,
-    frame: FrameTextures,
-    render_graph: wgpu::RenderGraph,
-}
-
-struct Example {
-    renderer: Renderer,
-}
-
 impl crate::framework::Example for Example {
+    fn optional_features() -> wgpu::Features {
+        wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
+    }
+
     fn required_features() -> wgpu::Features {
         wgpu::Features::MULTI_SUBPASS | wgpu::Features::TRANSIENT_ATTACHMENTS
     }
@@ -253,297 +316,153 @@ impl crate::framework::Example for Example {
         config: &wgpu::SurfaceConfiguration,
         adapter: &wgpu::Adapter,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        _queue: &wgpu::Queue,
     ) -> Self {
         let backend = adapter.get_info().backend;
         assert!(
             matches!(backend, wgpu::Backend::Metal | wgpu::Backend::Vulkan),
             "subpass_msaa supports only Metal/Vulkan backends"
         );
-        let sample_count = choose_msaa_sample_count(adapter)
-            .expect("subpass_msaa requires at least 2x MSAA support for Rgba8Unorm, Rgba16Float, and Depth32Float");
-        if sample_count != 4 {
-            log::warn!("subpass_msaa using {sample_count}x MSAA (4x unavailable on this adapter)");
-        }
 
-        let output_format = config
-            .view_formats
-            .first()
-            .copied()
-            .unwrap_or(config.format);
+        log::info!("Press left/right arrow keys to change sample_count.");
 
-        let mut graph_builder = wgpu::RenderGraphBuilder::new();
-        graph_builder.sample_count(sample_count);
-        let albedo_att =
-            graph_builder.add_transient_color("albedo_ms", wgpu::TextureFormat::Rgba8Unorm);
-        let lit_att = graph_builder.add_transient_color("lit_ms", wgpu::TextureFormat::Rgba16Float);
-        let depth_att =
-            graph_builder.add_transient_depth("depth_ms", wgpu::TextureFormat::Depth32Float);
-
-        graph_builder
-            .add_subpass("gbuffer")
-            .writes_color(albedo_att)
-            .writes_depth(depth_att);
-        graph_builder
-            .add_subpass("lighting")
-            .reads(albedo_att)
-            .writes_color(lit_att);
-
-        let render_graph = graph_builder.build().unwrap();
-        let color_attachment_formats = [
-            Some(wgpu::TextureFormat::Rgba8Unorm),
-            Some(wgpu::TextureFormat::Rgba16Float),
-        ];
-        let depth_stencil_format = Some(wgpu::TextureFormat::Depth32Float);
-
-        let frame = FrameTextures::new(device, config.width, config.height, sample_count);
-
-        let (vertices, indices) = create_cube_vertices();
-        let vertex_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("subpass_msaa vertex"),
-            contents: bytemuck::cast_slice(&vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-        let index_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("subpass_msaa index"),
-            contents: bytemuck::cast_slice(&indices),
-            usage: wgpu::BufferUsages::INDEX,
-        });
-
-        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("subpass_msaa uniforms"),
-            size: std::mem::size_of::<Uniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        write_uniforms(queue, &uniform_buf, config.width, config.height);
+        let max_sample_count = Self::max_sample_count(adapter, config.view_formats[0]);
+        let sample_count = max_sample_count;
 
         let gbuffer_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("subpass_msaa gbuffer"),
-            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!("gbuffer.wgsl"))),
+            label: Some("subpass_msaa gbuffer_shader"),
+            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!(
+                "gbuffer.wgsl"
+            ))),
         });
-        let gbuffer_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("subpass_msaa gbuffer_bgl"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
+        let present_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("subpass_msaa present_shader"),
+            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!(
+                "present.wgsl"
+            ))),
         });
-        let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("subpass_msaa uniforms_bg"),
-            layout: &gbuffer_bgl,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform_buf.as_entire_binding(),
-            }],
-        });
-        let gbuffer_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("subpass_msaa gbuffer_layout"),
-            bind_group_layouts: &[Some(&gbuffer_bgl)],
-            ..Default::default()
-        });
-        let gbuffer_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("subpass_msaa gbuffer_pipeline"),
-            layout: Some(&gbuffer_layout),
-            vertex: wgpu::VertexState {
-                module: &gbuffer_shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<Vertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x3],
-                }],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &gbuffer_shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::TextureFormat::Rgba8Unorm.into())],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                cull_mode: Some(wgpu::Face::Back),
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::Less),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-            multisample: wgpu::MultisampleState {
-                count: sample_count,
-                ..Default::default()
-            },
-            multiview_mask: None,
-            cache: None,
-            subpass_target: Some(render_graph.make_subpass_target(
-                0,
-                &color_attachment_formats,
-                depth_stencil_format,
-            )),
+        let resolve_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("subpass_msaa resolve_shader"),
+            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!(
+                "resolve.wgsl"
+            ))),
         });
 
-        let lighting_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("subpass_msaa lighting"),
-            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!("lighting.wgsl"))),
+        let vertex_data = Self::create_line_vertices();
+        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("subpass_msaa vertex_buffer"),
+            contents: bytemuck::cast_slice(&vertex_data),
+            usage: wgpu::BufferUsages::VERTEX,
         });
-        let lighting_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("subpass_msaa lighting_pipeline"),
-            layout: None,
-            vertex: wgpu::VertexState {
-                module: &lighting_shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &lighting_shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::TextureFormat::Rgba16Float.into())],
-            }),
-            primitive: Default::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState {
-                count: sample_count,
-                ..Default::default()
-            },
-            multiview_mask: None,
-            cache: None,
-            subpass_target: Some(render_graph.make_subpass_target(
-                1,
-                &color_attachment_formats,
-                depth_stencil_format,
-            )),
-        });
-        let lighting_bgl = lighting_pipeline.get_bind_group_layout(0);
-        let fallback_albedo_ms = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("subpass_msaa fallback_albedo_ms"),
-            size: wgpu::Extent3d {
-                width: 1,
-                height: 1,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
+        let vertex_count = vertex_data.len() as u32;
+
+        let active = Self::create_active_pipelines(
+            device,
+            config,
             sample_count,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-        let fallback_albedo_ms_view =
-            fallback_albedo_ms.create_view(&wgpu::TextureViewDescriptor::default());
-        let lighting_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("subpass_msaa lighting_bg"),
-            layout: &lighting_bgl,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(&fallback_albedo_ms_view),
-            }],
-        });
-
-        let composite_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("subpass_msaa composite"),
-            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!("composite.wgsl"))),
-        });
-        let composite_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("subpass_msaa composite_pipeline"),
-            layout: None,
-            vertex: wgpu::VertexState {
-                module: &composite_shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &composite_shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(output_format.into())],
-            }),
-            primitive: Default::default(),
-            depth_stencil: None,
-            multisample: Default::default(),
-            multiview_mask: None,
-            cache: None,
-            subpass_target: None,
-        });
-        let composite_bgl = composite_pipeline.get_bind_group_layout(0);
-        let composite_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("subpass_msaa composite_bg"),
-            layout: &composite_bgl,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(&frame.lit_ms_view),
-            }],
-        });
+            &gbuffer_shader,
+            &present_shader,
+            &resolve_shader,
+        );
 
         Self {
-            renderer: Renderer {
-                sample_count,
-                gbuffer_pipeline,
-                lighting_pipeline,
-                composite_pipeline,
-                vertex_buf,
-                index_buf,
-                index_count: indices.len() as u32,
-                uniform_buf,
-                uniform_bind_group,
-                lighting_bind_group,
-                composite_bind_group,
-                composite_bgl,
-                frame,
-                render_graph,
-            },
+            config: config.clone(),
+            gbuffer_shader,
+            present_shader,
+            resolve_shader,
+            vertex_buffer,
+            vertex_count,
+            sample_count,
+            max_sample_count,
+            rebuild: false,
+            active,
+        }
+    }
+
+    fn update(&mut self, event: WindowEvent) {
+        if let WindowEvent::KeyboardInput {
+            event:
+                KeyEvent {
+                    logical_key,
+                    state: ElementState::Pressed,
+                    ..
+                },
+            ..
+        } = event
+        {
+            match logical_key {
+                Key::Named(NamedKey::ArrowLeft) => {
+                    if self.sample_count == self.max_sample_count {
+                        self.sample_count = 1;
+                        self.rebuild = true;
+                    }
+                }
+                Key::Named(NamedKey::ArrowRight) => {
+                    if self.sample_count == 1 {
+                        self.sample_count = self.max_sample_count;
+                        self.rebuild = true;
+                    }
+                }
+                _ => {}
+            }
         }
     }
 
     fn resize(
         &mut self,
         config: &wgpu::SurfaceConfiguration,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        _device: &wgpu::Device,
+        _queue: &wgpu::Queue,
     ) {
-        let renderer = &mut self.renderer;
-        renderer.frame =
-            FrameTextures::new(device, config.width, config.height, renderer.sample_count);
-        write_uniforms(queue, &renderer.uniform_buf, config.width, config.height);
-        renderer.composite_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("subpass_msaa composite_bg"),
-            layout: &renderer.composite_bgl,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(&renderer.frame.lit_ms_view),
-            }],
-        });
+        self.config = config.clone();
+        self.rebuild = true;
     }
 
-    fn update(&mut self, _event: winit::event::WindowEvent) {}
-
     fn render(&mut self, view: &wgpu::TextureView, device: &wgpu::Device, queue: &wgpu::Queue) {
-        let renderer = &mut self.renderer;
+        if self.rebuild {
+            self.active = Self::create_active_pipelines(
+                device,
+                &self.config,
+                self.sample_count,
+                &self.gbuffer_shader,
+                &self.present_shader,
+                &self.resolve_shader,
+            );
+            self.rebuild = false;
+        }
 
-        let graph_views = renderer.render_graph.descriptor_views();
+        let graph_views = self.active.render_graph.descriptor_views();
+        let output_attachment = if self.sample_count == 1 {
+            wgpu::RenderPassColorAttachment {
+                view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            }
+        } else {
+            wgpu::RenderPassColorAttachment {
+                view: self.active.output_view.as_ref().unwrap(),
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            }
+        };
 
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("subpass_msaa encoder"),
-        });
+        let mut encoder =
+            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
 
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("subpass_msaa graph"),
+                label: Some("subpass_msaa pass"),
                 color_attachments: &[
                     Some(wgpu::RenderPassColorAttachment {
-                        view: &renderer.frame.albedo_view,
+                        view: &self.active.lines_view,
                         depth_slice: None,
                         resolve_target: None,
                         ops: wgpu::Operations {
@@ -551,45 +470,28 @@ impl crate::framework::Example for Example {
                             store: wgpu::StoreOp::Discard,
                         },
                     }),
-                    Some(wgpu::RenderPassColorAttachment {
-                        view: &renderer.frame.lit_ms_view,
-                        depth_slice: None,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    }),
+                    Some(output_attachment),
                 ],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &renderer.frame.depth_view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Discard,
-                    }),
-                    stencil_ops: None,
-                }),
+                depth_stencil_attachment: None,
                 subpasses: &graph_views.subpasses,
                 subpass_dependencies: graph_views.subpass_dependencies,
                 transient_memory_hint: wgpu::TransientMemoryHint::PreferTileMemory,
                 ..Default::default()
             });
 
-            pass.set_pipeline(&renderer.gbuffer_pipeline);
-            pass.set_bind_group(0, &renderer.uniform_bind_group, &[]);
-            pass.set_vertex_buffer(0, renderer.vertex_buf.slice(..));
-            pass.set_index_buffer(renderer.index_buf.slice(..), wgpu::IndexFormat::Uint16);
-            pass.draw_indexed(0..renderer.index_count, 0, 0..INSTANCE_COUNT);
+            pass.set_pipeline(&self.active.gbuffer_pipeline);
+            pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            pass.draw(0..self.vertex_count, 0..1);
 
             pass.next_subpass();
-            pass.set_pipeline(&renderer.lighting_pipeline);
-            pass.set_bind_group(0, &renderer.lighting_bind_group, &[]);
+            pass.set_pipeline(&self.active.present_pipeline);
+            pass.set_bind_group(0, &self.active.present_bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
 
-        {
+        if self.sample_count > 1 {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("subpass_msaa composite"),
+                label: Some("subpass_msaa resolve"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view,
                     depth_slice: None,
@@ -601,8 +503,8 @@ impl crate::framework::Example for Example {
                 })],
                 ..Default::default()
             });
-            pass.set_pipeline(&renderer.composite_pipeline);
-            pass.set_bind_group(0, &renderer.composite_bind_group, &[]);
+            pass.set_pipeline(self.active.resolve_pipeline.as_ref().unwrap());
+            pass.set_bind_group(0, self.active.resolve_bind_group.as_ref().unwrap(), &[]);
             pass.draw(0..3, 0..1);
         }
 
@@ -611,5 +513,24 @@ impl crate::framework::Example for Example {
 }
 
 pub fn main() {
-    crate::framework::run::<Example>("MSAA Subpass Inputs");
+    crate::framework::run::<Example>("subpass-msaa");
 }
+
+#[cfg(test)]
+#[wgpu_test::gpu_test]
+pub static TEST: crate::framework::ExampleTestParams = crate::framework::ExampleTestParams {
+    name: "subpass-msaa",
+    image_path: "/examples/features/src/subpass_msaa/screenshot.png",
+    width: 1024,
+    height: 768,
+    optional_features: wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES,
+    base_test_parameters: wgpu_test::TestParameters::default(),
+    comparisons: &[
+        wgpu_test::ComparisonType::Mean(0.065),
+        wgpu_test::ComparisonType::Percentile {
+            percentile: 0.5,
+            threshold: 0.29,
+        },
+    ],
+    _phantom: std::marker::PhantomData::<Example>,
+};

@@ -1,4 +1,4 @@
-@group(0) @binding(0) var lit_texture: texture_multisampled_2d<f32>;
+@group(0) @binding(0) var msaa_input: texture_multisampled_2d<f32>;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -15,14 +15,12 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
 
 @fragment
 fn fs_main(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
-    let dims = vec2<i32>(textureDimensions(lit_texture));
+    let dims = vec2<i32>(textureDimensions(msaa_input));
     let coords = clamp(vec2<i32>(pos.xy), vec2<i32>(0), dims - vec2<i32>(1));
-    let sample_count = textureNumSamples(lit_texture);
-    var hdr = vec3<f32>(0.0);
+    let sample_count = textureNumSamples(msaa_input);
+    var color = vec4<f32>(0.0);
     for (var i = 0u; i < sample_count; i = i + 1u) {
-        hdr = hdr + textureLoad(lit_texture, coords, i32(i)).rgb;
+        color = color + textureLoad(msaa_input, coords, i32(i));
     }
-    hdr = hdr / max(f32(sample_count), 1.0);
-    let mapped = hdr / (hdr + vec3<f32>(1.0));
-    return vec4<f32>(mapped, 1.0);
+    return color / max(f32(sample_count), 1.0);
 }
