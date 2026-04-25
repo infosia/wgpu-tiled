@@ -848,6 +848,8 @@ GPU render time is ~12% higher with subpass mode. This is expected — Vulkan su
 
 5. ~~**Depth/stencil aspect split is not modeled**~~ — **Fixed.** `ImageClass::SubpassInputStencil { multi }` plus the WGSL `subpass_input_stencil` / `subpass_input_stencil_multisampled` types are supported. Stencil subpass inputs lower to `usubpassInput` in GLSL and to a `u32` `SampledType` in SPIR-V. `subpassLoad` on a stencil subpass input returns `u32`.
 
+8. ~~**MSAA subpass inputs — sample-frequency execution is not enforced**~~ — **Fixed.** Fragment entry points that reach `subpass_input_multisampled*` must declare `@builtin(sample_index)` as an input, even when unused. Naga SPIR-V now emits a `SampleId` fragment input plus `SampleRateShading` capability for those entry points, and Vulkan pipeline creation forces `sampleShadingEnable = VK_TRUE` with `minSampleShading = 1.0` when an MSAA subpass input is reachable. GLSL deliberately hard-errors for MSAA subpass inputs because GLES is out of scope for this fork.
+
 12. ~~**Tile-memory lifetime is not spelled out in the shader contract**~~ — **Documented.** The lifetime and scope contract is now spelled out on `ImageClass::SubpassInput` and `Expression::SubpassLoad` doc-comments and in the [Subpass Input Shader Contract](#subpass-input-shader-contract) section below. The contract covers: pass-local validity, position-implicit reads, fragment-stage-only, and tile-memory backing when the source uses `TextureUsages::TRANSIENT`.
 
 13. ~~**Diagnostic quality for residual subpass-input misuse**~~ — **Improved.** `InvalidSubpassOp` now appends an actionable hint per operation (`ImageSample` → "use a separate sampled `texture_2d<T>`", `ImageQuery` → "use `@builtin(position)` for screen-space coordinates", `ImageStore`/`ImageAtomic` → "subpass inputs are read-only", `ImageLoad` → "use `subpassLoad(x)` instead"). Most direct misuse is already a WGSL type error at parse time; this covers the residual indirect cases (pointer aliasing, generic overload paths).
@@ -861,8 +863,6 @@ GPU render time is ~12% higher with subpass mode. This is expected — Vulkan su
 ### Remaining
 
 7. **DX12 subpass emulation** — Currently all stubs. Would need end-render-pass / begin-new-pass / bind-intermediates-as-SRVs approach.
-
-8. **MSAA subpass inputs — sample-frequency execution is not enforced** — The planned MSAA semantics say `subpassLoad(x)` on a multisampled input reads the *current sample only*. Under Vulkan this requires `sampleShadingEnable`; under Metal it requires the fragment function to reference `[[sample_id]]`. If the user writes an MSAA subpass-input shader that does not reference `@builtin(sample_index)`, the load silently returns sample 0 on some backends and a per-pixel average on others. No validator in naga or wgpu-core currently checks this. Until there is a rule (e.g. "MSAA subpass-input fragment shaders must declare `@builtin(sample_index)` as an input, even if unused"), MSAA subpass support is a foot-gun and should stay gated behind a capability flag. The validator currently rejects `subpass_input_multisampled*` outright as a placeholder until this question is answered.
 
 10. **Layered / multiview subpass inputs** — Current IR assumes `Arrayed: false` for subpass inputs. Multiview rendering (XR, stereo) uses layered attachments where each view index maps to a layer. Combining multiview with subpass inputs needs an implicit layer resolve via the current view index. Not supported today; would require an IR extension when multiview becomes a requirement.
 
